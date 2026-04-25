@@ -3,6 +3,7 @@
 
 # Derived data and source PDFs (large, regenerable)
 tmp/
+graph/
 
 # Python bytecode
 __pycache__/

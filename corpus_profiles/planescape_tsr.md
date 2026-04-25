@@ -39,3 +39,9 @@ Granular `type` values from extraction (e.g. `citadel`, `landmark`, `mephit`) ar
 - **faction** — one of the philosophical/political factions of Sigil and beyond.
 - **item** — a magic item, artifact, or notable physical object.
 - **concept** — a named cosmological concept, philosophical doctrine, or cant term.
+
+### OCR corrections
+
+Known OCR misreads in this corpus, applied as a search-replace to the combined document text before pass 1 runs. Bullets are `old → new`; replacement is plain string substitution.
+
+- Caviitus → Cavitius

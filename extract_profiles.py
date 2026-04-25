@@ -21,7 +21,7 @@ import regex as fuzzy_regex
 from dotenv import load_dotenv
 
 from .config import Settings
-from .ocr import load_corpus_profile
+from .ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
 
 
 _SUBMIT_ENTITY_PROFILE_TOOL = {
@@ -350,6 +350,7 @@ def submit_profiles(
     registry_path: Path,
     supertype_map_path: Path,
     output_dir: Path,
+    corpus_profile: Optional[Dict[str, str]] = None,
     model: Optional[str] = None,
     cache_ttl: str = "1h",
     skip_existing: bool = True,
@@ -360,6 +361,10 @@ def submit_profiles(
     chosen_model = model or settings.extraction_model
 
     document = document_path.read_text()
+    corrections = parse_ocr_corrections(corpus_profile) if corpus_profile else {}
+    if corrections:
+        document = apply_ocr_corrections(document, corrections)
+        print(f"Applied {len(corrections)} OCR corrections from corpus profile.", flush=True)
     with registry_path.open() as f:
         registry = json.load(f)
     with supertype_map_path.open() as f:
@@ -399,11 +404,16 @@ def collect_profiles(
     registry_path: Path,
     supertype_map_path: Path,
     output_dir: Path,
+    corpus_profile: Optional[Dict[str, str]] = None,
 ) -> None:
     settings = Settings()
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
     document = document_path.read_text()
+    corrections = parse_ocr_corrections(corpus_profile) if corpus_profile else {}
+    if corrections:
+        document = apply_ocr_corrections(document, corrections)
+        print(f"Applied {len(corrections)} OCR corrections from corpus profile.", flush=True)
     with registry_path.open() as f:
         registry = json.load(f)
     with supertype_map_path.open() as f:
@@ -490,6 +500,7 @@ if __name__ == "__main__":
     submit.add_argument("--registry", type=Path, required=True)
     submit.add_argument("--supertype-map", type=Path, required=True)
     submit.add_argument("--output-dir", type=Path, required=True)
+    submit.add_argument("--profile", type=Path, default=None, help="Optional corpus profile (used for OCR corrections).")
     submit.add_argument("--model", type=str, default=None)
     submit.add_argument("--cache-ttl", type=str, default="1h", choices=["5m", "1h"])
     submit.add_argument("--no-skip-existing", action="store_true", help="Re-submit entities even if output file exists.")
@@ -500,8 +511,10 @@ if __name__ == "__main__":
     collect.add_argument("--registry", type=Path, required=True)
     collect.add_argument("--supertype-map", type=Path, required=True)
     collect.add_argument("--output-dir", type=Path, required=True)
+    collect.add_argument("--profile", type=Path, default=None, help="Optional corpus profile (used for OCR corrections).")
 
     args = parser.parse_args()
+    corpus_profile = load_corpus_profile(args.profile) if args.profile else None
 
     if args.cmd == "submit":
         submit_profiles(
@@ -509,6 +522,7 @@ if __name__ == "__main__":
             registry_path=args.registry,
             supertype_map_path=args.supertype_map,
             output_dir=args.output_dir,
+            corpus_profile=corpus_profile,
             model=args.model,
             cache_ttl=args.cache_ttl,
             skip_existing=not args.no_skip_existing,
@@ -520,4 +534,5 @@ if __name__ == "__main__":
             registry_path=args.registry,
             supertype_map_path=args.supertype_map,
             output_dir=args.output_dir,
+            corpus_profile=corpus_profile,
         )

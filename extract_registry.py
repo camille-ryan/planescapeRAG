@@ -7,7 +7,7 @@ import anthropic
 from dotenv import load_dotenv
 
 from .config import Settings
-from .ocr import load_corpus_profile
+from .ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
 
 
 _REGISTER_ENTITIES_TOOL = {
@@ -109,6 +109,10 @@ def extract_registry(
         raise ValueError("ANTHROPIC_API_KEY must be set for entity extraction.")
 
     document_text = document_path.read_text()
+    corrections = parse_ocr_corrections(profile)
+    if corrections:
+        document_text = apply_ocr_corrections(document_text, corrections)
+        print(f"Applied {len(corrections)} OCR corrections from corpus profile.", flush=True)
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     system_prompt = _build_system_prompt(profile)
     user_message = (

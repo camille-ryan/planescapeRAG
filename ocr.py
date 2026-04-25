@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Dict, List, Optional
@@ -29,6 +30,40 @@ def build_ocr_prompt(profile: Optional[Dict[str, str]] = None) -> str:
     if profile and profile.get("ocr"):
         return f"{_OCR_BASE_PROMPT}\n\n{profile['ocr']}"
     return _OCR_BASE_PROMPT
+
+
+_OCR_CORRECTION_BULLET_RE = re.compile(r"^\s*-\s*(.+?)\s*→\s*(.+?)\s*$")
+
+
+def parse_ocr_corrections(profile: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """Extract OCR corrections from the profile's Ingest addendum.
+
+    Looks for `- old → new` bullets under a `### OCR corrections` heading.
+    Returns {old: new}. Empty dict if no profile or no section.
+    """
+    if not profile or "ingest" not in profile:
+        return {}
+
+    in_section = False
+    corrections: Dict[str, str] = {}
+    for line in profile["ingest"].splitlines():
+        if line.startswith("### "):
+            heading = line[4:].strip().lower()
+            in_section = "ocr correction" in heading or heading.startswith("ocr correction")
+            continue
+        if not in_section:
+            continue
+        match = _OCR_CORRECTION_BULLET_RE.match(line)
+        if match:
+            corrections[match.group(1).strip()] = match.group(2).strip()
+    return corrections
+
+
+def apply_ocr_corrections(text: str, corrections: Dict[str, str]) -> str:
+    """Apply each correction as a plain-string replacement, in iteration order."""
+    for old, new in corrections.items():
+        text = text.replace(old, new)
+    return text
 
 
 def load_corpus_profile(path: Path) -> Dict[str, str]:
