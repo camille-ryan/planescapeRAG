@@ -1,0 +1,417 @@
+"""Pass 2: per-entity profile extraction.
+
+For each entity in the registry, calls Claude with the full document + registry
+in cached context, and extracts a structured profile (description, source pages,
+typed relationships with verbatim quotes). Writes one markdown file per entity
+under {output_dir}/{supertype}/{slug}.md.
+
+Uses the Anthropic message batches API with 1-hour prompt caching: the document
++ registry prefix is cached once and reused across all per-entity calls.
+"""
+
+import argparse
+import json
+import re
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
+
+import anthropic
+from dotenv import load_dotenv
+
+from .config import Settings
+from .ocr import load_corpus_profile
+
+
+_SUBMIT_ENTITY_PROFILE_TOOL = {
+    "name": "submit_entity_profile",
+    "description": "Submit the structured profile for the current entity. Call this exactly once.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "description": {
+                "type": "string",
+                "description": (
+                    "Multi-paragraph markdown description of the entity, written in the document's framing. "
+                    "When referencing OTHER entities, use [[Canonical Name]] wikilinks where Canonical Name "
+                    "exactly matches an entry in the registry. Do not self-link. Stay close to source; do not "
+                    "editorialize or invent details."
+                ),
+            },
+            "source_pages": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": (
+                    "Page numbers (read from <!-- page N --> markers in the document) where this entity is "
+                    "meaningfully discussed. Sorted and deduplicated."
+                ),
+            },
+            "relationships": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "target": {
+                            "type": "string",
+                            "description": "Canonical name of the related entity. MUST match a canonical_name in the registry exactly. MUST NOT equal the entity being profiled.",
+                        },
+                        "quote": {
+                            "type": "string",
+                            "description": "Verbatim sentence(s) from the document that establish this relationship. The quote must appear in the document literally (whitespace may differ).",
+                        },
+                        "page": {
+                            "type": "integer",
+                            "description": "Page where the quote appears.",
+                        },
+                    },
+                    "required": ["target", "quote", "page"],
+                },
+                "description": "Directed edges from this entity to others. Only include relationships the document explicitly establishes.",
+            },
+        },
+        "required": ["description", "source_pages", "relationships"],
+    },
+}
+
+
+_SYSTEM_PROMPT = """You are extracting a structured profile for a single named entity from a document.
+
+You will be given:
+- The full document text (inside <document>...</document>)
+- A registry of all entities in the document (inside <registry>...</registry>)
+- A specific entity name to profile
+
+Submit the profile using the `submit_entity_profile` tool, with these fields:
+
+# description
+A multi-paragraph markdown description of the entity, written in the document's framing. Use `[[Canonical Name]]` wikilinks when referencing OTHER entities, where Canonical Name must exactly match a `canonical_name` in the registry. Do not self-link. Stay close to source; do not editorialize or invent details.
+
+# source_pages
+Page numbers (read from `<!-- page N -->` markers in the document) where this entity is meaningfully discussed. Sort and deduplicate.
+
+# relationships
+Directed edges from this entity to others. For each:
+- target: canonical name of the related entity (must match registry exactly; must not equal the entity being profiled).
+- quote: verbatim sentence(s) from the document that establish the relationship. The quote must appear in the document literally — paraphrasing breaks downstream validation.
+- page: page where the quote appears.
+
+Only include relationships the document explicitly establishes. If the entity is mentioned only briefly, description may be short and relationships may be empty. Better to be sparse than to invent."""
+
+
+_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+_PAGE_MARKER_RE = re.compile(r"<!-- page (\d+) -->")
+
+
+def _slug(name: str) -> str:
+    """Filesystem-safe slug from a canonical entity name."""
+    s = name.lower()
+    s = re.sub(r"['’]", "", s)  # strip apostrophes
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+
+
+def _normalize_for_quote_match(text: str) -> str:
+    """Collapse whitespace runs to single spaces; lowercase. For substring search of quotes."""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _validate_quote(quote: str, document_normalized: str) -> bool:
+    return _normalize_for_quote_match(quote) in document_normalized
+
+
+def _build_registry_payload(registry: dict) -> str:
+    """Compact JSON list of entities, suitable for inclusion in the cached prefix."""
+    entries = [
+        {
+            "canonical_name": e["canonical_name"],
+            "type": e["type"],
+            "aliases": e.get("aliases", []) or [],
+            "brief_description": e["brief_description"],
+        }
+        for e in registry["entities"]
+    ]
+    return json.dumps(entries, ensure_ascii=False, indent=1)
+
+
+def _build_request(
+    entity: dict,
+    document: str,
+    registry_text: str,
+    model: str,
+    cache_ttl: str,
+) -> dict:
+    cached_block = (
+        "<document>\n"
+        + document
+        + "\n</document>\n\n<registry>\n"
+        + registry_text
+        + "\n</registry>"
+    )
+    instruction = (
+        f"Now generate the profile for: {entity['canonical_name']}\n\n"
+        f"(Type from registry: {entity['type']}. Aliases in registry: "
+        f"{json.dumps(entity.get('aliases', []) or [])}.)"
+    )
+    return {
+        "custom_id": _slug(entity["canonical_name"]),
+        "params": {
+            "model": model,
+            "max_tokens": 4000,
+            "system": [
+                {"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral", "ttl": cache_ttl}},
+            ],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": cached_block, "cache_control": {"type": "ephemeral", "ttl": cache_ttl}},
+                        {"type": "text", "text": instruction},
+                    ],
+                }
+            ],
+            "tools": [_SUBMIT_ENTITY_PROFILE_TOOL],
+            "tool_choice": {"type": "tool", "name": "submit_entity_profile"},
+        },
+    }
+
+
+def _build_frontmatter(entity: dict, supertype: str, source_pages: List[int]) -> str:
+    fields = {
+        "canonical_name": entity["canonical_name"],
+        "type": entity["type"],
+        "supertype": supertype,
+        "aliases": entity.get("aliases", []) or [],
+        "notable": entity["notable"],
+        "source_pages": sorted(set(source_pages)),
+    }
+    lines = ["---"]
+    for k, v in fields.items():
+        lines.append(f"{k}: {json.dumps(v, ensure_ascii=False)}")
+    lines.append("---")
+    return "\n".join(lines)
+
+
+def _filter_relationships(
+    relationships: List[dict],
+    self_canonical: str,
+    canonical_names: Set[str],
+    document_normalized: str,
+) -> Tuple[List[dict], Dict[str, int]]:
+    """Drop self-relationships, unknown targets, and unverifiable quotes. Return (kept, drop_counts)."""
+    kept = []
+    drops = {"self": 0, "unknown_target": 0, "quote_not_in_doc": 0}
+    for rel in relationships:
+        if rel["target"] == self_canonical:
+            drops["self"] += 1
+            continue
+        if rel["target"] not in canonical_names:
+            drops["unknown_target"] += 1
+            continue
+        if not _validate_quote(rel["quote"], document_normalized):
+            drops["quote_not_in_doc"] += 1
+            continue
+        kept.append(rel)
+    return kept, drops
+
+
+def _strip_unresolved_wikilinks(text: str, canonical_names: Set[str]) -> Tuple[str, List[str]]:
+    """Replace [[X]] with X (plain text) when X isn't a registered canonical_name. Return (cleaned, broken_links)."""
+    broken = []
+
+    def sub(m):
+        name = m.group(1)
+        if name in canonical_names:
+            return m.group(0)
+        broken.append(name)
+        return name
+
+    return _WIKILINK_RE.sub(sub, text), broken
+
+
+def _assemble_markdown(entity: dict, supertype: str, profile: dict) -> str:
+    frontmatter = _build_frontmatter(entity, supertype, profile["source_pages"])
+    body = [f"# {entity['canonical_name']}", "", profile["description"]]
+    if profile["relationships"]:
+        body.extend(["", "## Relationships", ""])
+        for rel in profile["relationships"]:
+            quote = rel["quote"].strip().replace("\n", " ")
+            body.append(f"- [[{rel['target']}]] — \"{quote}\" (p. {rel['page']})")
+    return frontmatter + "\n\n" + "\n".join(body) + "\n"
+
+
+def _output_path(output_dir: Path, supertype: str, entity: dict) -> Path:
+    return output_dir / supertype / f"{_slug(entity['canonical_name'])}.md"
+
+
+def submit_profiles(
+    document_path: Path,
+    registry_path: Path,
+    supertype_map_path: Path,
+    output_dir: Path,
+    model: Optional[str] = None,
+    cache_ttl: str = "1h",
+    skip_existing: bool = True,
+) -> str:
+    settings = Settings()
+    if not settings.anthropic_api_key:
+        raise ValueError("ANTHROPIC_API_KEY must be set.")
+    chosen_model = model or settings.extraction_model
+
+    document = document_path.read_text()
+    with registry_path.open() as f:
+        registry = json.load(f)
+    with supertype_map_path.open() as f:
+        supertype_map = json.load(f)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    registry_text = _build_registry_payload(registry)
+
+    # Build one request per entity, skipping any whose output file already exists.
+    requests = []
+    skipped = 0
+    for entity in registry["entities"]:
+        supertype = supertype_map.get(entity["type"])
+        if supertype is None:
+            print(f"WARNING: no supertype for type={entity['type']!r}; skipping {entity['canonical_name']}")
+            continue
+        path = _output_path(output_dir, supertype, entity)
+        if skip_existing and path.exists():
+            skipped += 1
+            continue
+        requests.append(_build_request(entity, document, registry_text, chosen_model, cache_ttl))
+
+    print(f"Building {len(requests)} requests ({skipped} skipped, already exist).")
+    if not requests:
+        print("Nothing to submit.")
+        return ""
+
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    batch = client.messages.batches.create(requests=requests)
+    print(f"Submitted batch: {batch.id}  status={batch.processing_status}  count={len(requests)}")
+    return batch.id
+
+
+def collect_profiles(
+    batch_id: str,
+    document_path: Path,
+    registry_path: Path,
+    supertype_map_path: Path,
+    output_dir: Path,
+) -> None:
+    settings = Settings()
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+    document = document_path.read_text()
+    with registry_path.open() as f:
+        registry = json.load(f)
+    with supertype_map_path.open() as f:
+        supertype_map = json.load(f)
+
+    canonical_names = {e["canonical_name"] for e in registry["entities"]}
+    by_slug = {_slug(e["canonical_name"]): e for e in registry["entities"]}
+    document_normalized = _normalize_for_quote_match(document)
+
+    print(f"Polling batch {batch_id}...")
+    while True:
+        batch = client.messages.batches.retrieve(batch_id)
+        counts = batch.request_counts
+        print(f"  status={batch.processing_status}  succeeded={counts.succeeded}  errored={counts.errored}  processing={counts.processing}", flush=True)
+        if batch.processing_status == "ended":
+            break
+        time.sleep(60)
+
+    written = 0
+    drop_totals = {"self": 0, "unknown_target": 0, "quote_not_in_doc": 0}
+    broken_link_totals = 0
+    failures: List[str] = []
+
+    for result in client.messages.batches.results(batch_id):
+        slug = result.custom_id
+        entity = by_slug.get(slug)
+        if entity is None:
+            failures.append(f"{slug}: no matching entity in registry")
+            continue
+        if result.result.type != "succeeded":
+            err = getattr(result.result, "error", None)
+            failures.append(f"{slug}: {result.result.type}  {err}")
+            continue
+
+        message = result.result.message
+        tool_use = next(
+            (b for b in message.content if b.type == "tool_use" and b.name == "submit_entity_profile"),
+            None,
+        )
+        if tool_use is None:
+            failures.append(f"{slug}: model did not call submit_entity_profile")
+            continue
+
+        profile = dict(tool_use.input)
+        profile["relationships"], drops = _filter_relationships(
+            profile.get("relationships", []),
+            entity["canonical_name"],
+            canonical_names,
+            document_normalized,
+        )
+        for k in drop_totals:
+            drop_totals[k] += drops[k]
+
+        cleaned_description, broken = _strip_unresolved_wikilinks(profile["description"], canonical_names)
+        profile["description"] = cleaned_description
+        broken_link_totals += len(broken)
+
+        supertype = supertype_map[entity["type"]]
+        path = _output_path(output_dir, supertype, entity)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_assemble_markdown(entity, supertype, profile))
+        written += 1
+
+    print(f"\nWrote {written} entity files under {output_dir}")
+    print(f"Dropped relationships: self={drop_totals['self']}  unknown_target={drop_totals['unknown_target']}  quote_not_in_doc={drop_totals['quote_not_in_doc']}")
+    print(f"Stripped unresolved wikilinks in descriptions: {broken_link_totals}")
+    if failures:
+        print(f"\n{len(failures)} request failures:")
+        for f in failures[:20]:
+            print(f"  {f}")
+
+
+if __name__ == "__main__":
+    load_dotenv(Path(__file__).parent / ".env")
+    parser = argparse.ArgumentParser(description="Pass 2: per-entity profile extraction via Anthropic batch API.")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    submit = sub.add_parser("submit", help="Build per-entity requests and submit a batch.")
+    submit.add_argument("--document", type=Path, required=True)
+    submit.add_argument("--registry", type=Path, required=True)
+    submit.add_argument("--supertype-map", type=Path, required=True)
+    submit.add_argument("--output-dir", type=Path, required=True)
+    submit.add_argument("--model", type=str, default=None)
+    submit.add_argument("--cache-ttl", type=str, default="1h", choices=["5m", "1h"])
+    submit.add_argument("--no-skip-existing", action="store_true", help="Re-submit entities even if output file exists.")
+
+    collect = sub.add_parser("collect", help="Poll a batch and write entity files from results.")
+    collect.add_argument("batch_id", type=str)
+    collect.add_argument("--document", type=Path, required=True)
+    collect.add_argument("--registry", type=Path, required=True)
+    collect.add_argument("--supertype-map", type=Path, required=True)
+    collect.add_argument("--output-dir", type=Path, required=True)
+
+    args = parser.parse_args()
+
+    if args.cmd == "submit":
+        submit_profiles(
+            document_path=args.document,
+            registry_path=args.registry,
+            supertype_map_path=args.supertype_map,
+            output_dir=args.output_dir,
+            model=args.model,
+            cache_ttl=args.cache_ttl,
+            skip_existing=not args.no_skip_existing,
+        )
+    elif args.cmd == "collect":
+        collect_profiles(
+            batch_id=args.batch_id,
+            document_path=args.document,
+            registry_path=args.registry,
+            supertype_map_path=args.supertype_map,
+            output_dir=args.output_dir,
+        )
