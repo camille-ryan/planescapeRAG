@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import anthropic
+import regex as fuzzy_regex
 from dotenv import load_dotenv
 
 from .config import Settings
@@ -135,6 +136,64 @@ def _validate_quote(quote: str, document_normalized: str) -> bool:
     return _normalize_for_quote_match(quote) in document_normalized
 
 
+_ELLIPSIS_SPLIT_RE = fuzzy_regex.compile(r"\.{3,}|…")
+
+
+def _build_segment_pattern(segment: str, max_internal_edits: int = 5) -> str:
+    """Build a fuzzy regex for one segment of a quote.
+
+    For 4+ word segments: anchor first and last word exactly, allow up to
+    max_internal_edits in the middle. For shorter segments: whole-segment
+    fuzzy with edit budget proportional to length.
+    """
+    words = segment.split()
+    if len(words) >= 4:
+        first = fuzzy_regex.escape(words[0])
+        last = fuzzy_regex.escape(words[-1])
+        middle = fuzzy_regex.escape(" ".join(words[1:-1]))
+        return rf"{first}\s+(?:{middle}){{e<={max_internal_edits}}}\s+{last}"
+    max_e = max(1, len(segment) // 15)
+    return f"(?:{fuzzy_regex.escape(segment)}){{e<={max_e}}}"
+
+
+def _fuzzy_find_quote(emitted: str, document: str, max_internal_edits: int = 5) -> Optional[str]:
+    """Find the document's text matching the emitted quote (fuzzy).
+
+    Searches the *original* document (case-insensitively) and returns the matched
+    span verbatim from the source — preserving the document's case, punctuation,
+    and any markdown emphasis. Returns None on no match.
+
+    Strategy:
+    - Whitespace-collapse the emitted quote.
+    - Split on ellipsis (`...` or `…`); treat each segment as a separately
+      anchored fuzzy match, glued by `(?s).{0,300}?` wildcards.
+    - Each segment uses first-word/last-word exact anchors with up to
+      max_internal_edits edits in the middle (or whole-segment fuzzy if
+      shorter than 4 words). Edits cover the model's punctuation drift
+      (curly→ASCII quotes, em-dash → hyphen, dropped commas, etc.).
+    """
+    emitted_clean = re.sub(r"\s+", " ", emitted).strip()
+    if not emitted_clean:
+        return None
+
+    segments = [s.strip() for s in _ELLIPSIS_SPLIT_RE.split(emitted_clean) if s.strip()]
+    if not segments:
+        return None
+
+    sub_patterns = [_build_segment_pattern(s, max_internal_edits) for s in segments]
+    pattern = r"(?s).{0,300}?".join(sub_patterns)
+
+    try:
+        match = fuzzy_regex.search(
+            pattern,
+            document,
+            flags=fuzzy_regex.IGNORECASE | fuzzy_regex.BESTMATCH,
+        )
+    except fuzzy_regex.error:
+        return None
+    return match.group(0) if match else None
+
+
 def _build_registry_payload(registry: dict) -> str:
     """Compact JSON list of entities, suitable for inclusion in the cached prefix."""
     entries = [
@@ -211,11 +270,20 @@ def _filter_relationships(
     relationships: List[dict],
     self_canonical: str,
     canonical_names: Set[str],
+    document: str,
     document_normalized: str,
-) -> Tuple[List[dict], Dict[str, int]]:
-    """Drop self-relationships, unknown targets, and unverifiable quotes. Return (kept, drop_counts)."""
+) -> Tuple[List[dict], Dict[str, int], int]:
+    """Drop self-relationships, unknown targets, and unverifiable quotes.
+
+    For quotes that fail exact substring match, falls back to fuzzy regex search
+    against the original document. On fuzzy match, replaces the model's emitted
+    quote with the document's matched span (verbatim source text).
+
+    Returns (kept, drop_counts, fuzzy_rescue_count).
+    """
     kept = []
     drops = {"self": 0, "unknown_target": 0, "quote_not_in_doc": 0}
+    rescued = 0
     for rel in relationships:
         if rel["target"] == self_canonical:
             drops["self"] += 1
@@ -223,11 +291,18 @@ def _filter_relationships(
         if rel["target"] not in canonical_names:
             drops["unknown_target"] += 1
             continue
-        if not _validate_quote(rel["quote"], document_normalized):
-            drops["quote_not_in_doc"] += 1
+        if _validate_quote(rel["quote"], document_normalized):
+            kept.append(rel)
             continue
-        kept.append(rel)
-    return kept, drops
+        found = _fuzzy_find_quote(rel["quote"], document)
+        if found is not None:
+            rel = dict(rel)
+            rel["quote"] = re.sub(r"\s+", " ", found).strip()
+            kept.append(rel)
+            rescued += 1
+        else:
+            drops["quote_not_in_doc"] += 1
+    return kept, drops, rescued
 
 
 def _strip_unresolved_wikilinks(text: str, canonical_names: Set[str]) -> Tuple[str, List[str]]:
@@ -338,6 +413,7 @@ def collect_profiles(
 
     written = 0
     drop_totals = {"self": 0, "unknown_target": 0, "quote_not_in_doc": 0}
+    fuzzy_rescued_total = 0
     broken_link_totals = 0
     failures: List[str] = []
 
@@ -362,14 +438,16 @@ def collect_profiles(
             continue
 
         profile = dict(tool_use.input)
-        profile["relationships"], drops = _filter_relationships(
+        profile["relationships"], drops, rescued = _filter_relationships(
             profile.get("relationships", []),
             entity["canonical_name"],
             canonical_names,
+            document,
             document_normalized,
         )
         for k in drop_totals:
             drop_totals[k] += drops[k]
+        fuzzy_rescued_total += rescued
 
         cleaned_description, broken = _strip_unresolved_wikilinks(profile["description"], canonical_names)
         profile["description"] = cleaned_description
@@ -383,6 +461,7 @@ def collect_profiles(
 
     print(f"\nWrote {written} entity files under {output_dir}")
     print(f"Dropped relationships: self={drop_totals['self']}  unknown_target={drop_totals['unknown_target']}  quote_not_in_doc={drop_totals['quote_not_in_doc']}")
+    print(f"Quotes rescued via fuzzy match: {fuzzy_rescued_total}")
     print(f"Stripped unresolved wikilinks in descriptions: {broken_link_totals}")
     if failures:
         print(f"\n{len(failures)} request failures:")

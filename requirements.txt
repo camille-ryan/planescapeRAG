@@ -3,3 +3,4 @@ anthropic
 python-dotenv
 pdf2image
 boto3
+regex
