@@ -306,15 +306,26 @@ def _filter_relationships(
 
 
 def _strip_unresolved_wikilinks(text: str, canonical_names: Set[str]) -> Tuple[str, List[str]]:
-    """Replace [[X]] with X (plain text) when X isn't a registered canonical_name. Return (cleaned, broken_links)."""
+    """Resolve wikilinks against the registry.
+
+    Handles both [[Target]] and [[Target|Display]] (Obsidian display-syntax).
+    - If Target is in canonical_names, the wikilink is kept as-is (preserving
+      any |Display alias for prose readability).
+    - If Target is not canonical, the brackets are stripped:
+      - [[Target]] → Target
+      - [[Target|Display]] → Display (drop the broken target, keep the display text)
+    Returns (cleaned_text, list_of_broken_targets).
+    """
     broken = []
 
     def sub(m):
-        name = m.group(1)
-        if name in canonical_names:
+        inner = m.group(1)
+        target, sep, display = inner.partition("|")
+        target = target.strip()
+        if target in canonical_names:
             return m.group(0)
-        broken.append(name)
-        return name
+        broken.append(target)
+        return display.strip() if sep else target
 
     return _WIKILINK_RE.sub(sub, text), broken
 
