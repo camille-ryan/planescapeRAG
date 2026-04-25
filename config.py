@@ -14,6 +14,8 @@ class Settings:
     s3_ocr_bucket: str = os.getenv("S3_OCR_BUCKET", "")
     aws_access_key_id: str = os.getenv("AWS_ACCESS_KEY_ID", "")
     aws_secret_access_key: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    extraction_model: str = os.getenv("EXTRACTION_MODEL", "claude-sonnet-4-6")
 
     def validate(self):
         if not self.openai_api_key:

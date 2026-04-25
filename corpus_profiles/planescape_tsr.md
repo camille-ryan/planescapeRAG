@@ -20,4 +20,10 @@ This document is from a TSR-published Planescape sourcebook. Apply these corpus-
 
 ## Ingest addendum
 
-TBD — populated when the ingest pass is implemented.
+### Canonical names
+
+- Use the form most common or most formal in the source.
+- Strip leading "the" except where load-bearing ("The Lady of Pain" — keep).
+- Planes: prefer the full form ("Quasielemental Plane of Radiance", not "Plane of Radiance").
+- Factions: prefer the full faction name over slang ("Doomguard", not "Sinkers" — but Sinkers goes in aliases).
+- Characters: prefer "First Last" if both appear; otherwise the most-used form.
