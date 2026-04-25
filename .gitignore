@@ -1,0 +1,14 @@
+# Secrets
+.env
+
+# Derived data and source PDFs (large, regenerable)
+tmp/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# OS / editor cruft
+.DS_Store
+*.swp

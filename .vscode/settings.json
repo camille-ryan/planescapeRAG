@@ -1,0 +1,14 @@
+{
+  "terminal.integrated.profiles.linux": {
+    "graphRAG Conda": {
+      "path": "/bin/bash",
+      "args": [
+        "-lc",
+        "source /home/ryan/miniconda3/etc/profile.d/conda.sh && conda activate graphRAG && exec bash"
+      ]
+    }
+  },
+  "terminal.integrated.defaultProfile.linux": "graphRAG Conda",
+  "python.condaPath": "/home/ryan/miniconda3/bin/conda",
+  "python.defaultInterpreterPath": "/mnt/d/conda_envs/graphRAG/bin/python"
+}
