@@ -96,7 +96,9 @@ Directed edges from this entity to others. For each:
 - quote: verbatim sentence(s) from the document that establish the relationship. The quote must appear in the document literally — paraphrasing breaks downstream validation.
 - page: page where the quote appears.
 
-Only include relationships the document explicitly establishes. If the entity is mentioned only briefly, description may be short and relationships may be empty. Better to be sparse than to invent."""
+Only include relationships the document explicitly establishes. If the entity is mentioned only briefly, description may be short and relationships may be empty. Better to be sparse than to invent.
+
+For entities the registry marks as notable=true, you MUST populate the relationships array with explicit edges, not just inline wikilinks in the description. Aim for 8+ relationships for highly-connected entities (factions, planes, major characters, central locations). The description and the relationships serve different purposes: description is for human reading; relationships are the structured graph edges that downstream consumers (graph-DB import, retrieval) depend on. Do not skip the relationships field by claiming the description covers it."""
 
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
