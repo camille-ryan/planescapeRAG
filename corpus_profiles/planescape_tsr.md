@@ -27,3 +27,15 @@ This document is from a TSR-published Planescape sourcebook. Apply these corpus-
 - Planes: prefer the full form ("Quasielemental Plane of Radiance", not "Plane of Radiance").
 - Factions: prefer the full faction name over slang ("Doomguard", not "Sinkers" — but Sinkers goes in aliases).
 - Characters: prefer "First Last" if both appear; otherwise the most-used form.
+
+### Supertypes
+
+Granular `type` values from extraction (e.g. `citadel`, `landmark`, `mephit`) are mapped to one of these supertypes:
+
+- **plane** — any of the planes in the Great Wheel cosmology (Inner, Outer, Quasielemental, Para-elemental, Astral, Ethereal, Sigil-as-plane).
+- **place** — any specific location, landmark, fortified site, or named geography within a plane.
+- **character** — a named individual: NPC, deity, proxy, lord, named lich or demigod.
+- **creature** — a species, race, or monster type used as a category (not a named individual).
+- **faction** — one of the philosophical/political factions of Sigil and beyond.
+- **item** — a magic item, artifact, or notable physical object.
+- **concept** — a named cosmological concept, philosophical doctrine, or cant term.
