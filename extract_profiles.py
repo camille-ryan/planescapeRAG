@@ -110,8 +110,24 @@ def _slug(name: str) -> str:
     return s.strip("-")
 
 
+_PUNCTUATION_FOLD = str.maketrans({
+    "‘": "'",  # left single quote
+    "’": "'",  # right single quote
+    "“": '"',  # left double quote
+    "”": '"',  # right double quote
+    "–": "-",  # en dash
+    "—": "-",  # em dash
+    "…": "...",  # ellipsis
+})
+
+
 def _normalize_for_quote_match(text: str) -> str:
-    """Collapse whitespace runs to single spaces; lowercase. For substring search of quotes."""
+    """Fold Unicode punctuation, collapse whitespace, lowercase. For substring search of quotes.
+
+    The OCR'd document uses curly quotes and em-dashes; the LLM tends to emit ASCII
+    forms. Without folding, semantically-identical quotes fail substring match.
+    """
+    text = text.translate(_PUNCTUATION_FOLD)
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
