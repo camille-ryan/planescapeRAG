@@ -122,14 +122,16 @@ def extract_registry(
     chosen_model = model or settings.extraction_model
 
     print(f"Extracting registry with {chosen_model}... (document: {len(document_text)} chars)", flush=True)
-    response = client.messages.create(
+    # Use streaming because high max_tokens requests can exceed the SDK's 10-minute non-streaming cutoff.
+    with client.messages.stream(
         model=chosen_model,
-        max_tokens=16000,
+        max_tokens=32000,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
         tools=[_REGISTER_ENTITIES_TOOL],
         tool_choice={"type": "tool", "name": "register_entities"},
-    )
+    ) as stream:
+        response = stream.get_final_message()
 
     tool_use = next(
         (b for b in response.content if b.type == "tool_use" and b.name == "register_entities"),
@@ -138,7 +140,12 @@ def extract_registry(
     if tool_use is None:
         raise RuntimeError(f"Model did not call register_entities. Stop reason: {response.stop_reason}. Content: {response.content}")
     if "entities" not in tool_use.input:
-        raise RuntimeError(f"Tool input missing 'entities' key: {tool_use.input}")
+        raise RuntimeError(
+            f"Tool input missing 'entities' key (likely max_tokens overflow during tool call). "
+            f"Stop reason: {response.stop_reason}. "
+            f"Usage: input={response.usage.input_tokens} output={response.usage.output_tokens}. "
+            f"Tool input keys: {list(tool_use.input.keys())}"
+        )
 
     registry = tool_use.input
     output_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False))

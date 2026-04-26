@@ -269,7 +269,7 @@ def _build_frontmatter(entity: dict, supertype: str, source_pages: List[int]) ->
 
 
 def _filter_relationships(
-    relationships: List[dict],
+    relationships,
     self_canonical: str,
     canonical_names: Set[str],
     document: str,
@@ -283,10 +283,23 @@ def _filter_relationships(
 
     Returns (kept, drop_counts, fuzzy_rescue_count).
     """
+    drops = {"self": 0, "unknown_target": 0, "quote_not_in_doc": 0, "malformed": 0}
+    # Model occasionally emits the whole array as a JSON-encoded string
+    # instead of a parsed array. Recover by parsing.
+    if isinstance(relationships, str):
+        try:
+            relationships = json.loads(relationships)
+        except json.JSONDecodeError:
+            relationships = []
+    if not isinstance(relationships, list):
+        return [], drops, 0
+
     kept = []
-    drops = {"self": 0, "unknown_target": 0, "quote_not_in_doc": 0}
     rescued = 0
     for rel in relationships:
+        if not isinstance(rel, dict) or "target" not in rel or "quote" not in rel:
+            drops["malformed"] += 1
+            continue
         if rel["target"] == self_canonical:
             drops["self"] += 1
             continue
@@ -435,7 +448,7 @@ def collect_profiles(
         time.sleep(60)
 
     written = 0
-    drop_totals = {"self": 0, "unknown_target": 0, "quote_not_in_doc": 0}
+    drop_totals = {"self": 0, "unknown_target": 0, "quote_not_in_doc": 0, "malformed": 0}
     fuzzy_rescued_total = 0
     broken_link_totals = 0
     failures: List[str] = []
@@ -483,7 +496,7 @@ def collect_profiles(
         written += 1
 
     print(f"\nWrote {written} entity files under {output_dir}")
-    print(f"Dropped relationships: self={drop_totals['self']}  unknown_target={drop_totals['unknown_target']}  quote_not_in_doc={drop_totals['quote_not_in_doc']}")
+    print(f"Dropped relationships: self={drop_totals['self']}  unknown_target={drop_totals['unknown_target']}  quote_not_in_doc={drop_totals['quote_not_in_doc']}  malformed={drop_totals['malformed']}")
     print(f"Quotes rescued via fuzzy match: {fuzzy_rescued_total}")
     print(f"Stripped unresolved wikilinks in descriptions: {broken_link_totals}")
     if failures:
