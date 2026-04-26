@@ -63,15 +63,27 @@ def _merge_into(existing: dict, incoming: dict) -> None:
 def _find_fuzzy_canonical(target: str, candidates: List[str]) -> Optional[str]:
     """Find a candidate canonical name that's a near-match for target.
 
-    Edit budget: ~1 edit per 12 characters, capped at 3. Tight enough to avoid
-    spurious merges (e.g. "Plane of Air" vs "Plane of War"); loose enough to
-    catch case/article variants and small OCR drift.
+    Two passes: first look for exact-after-normalize matches (case +
+    leading-"the" folded), then fall back to fuzzy with edit budget
+    ~1 edit per 12 characters, capped at 3.
+
+    The two-pass order matters: 'Manes' should match an existing 'manes'
+    (zero edits, just case) before considering 'Mazes' (one edit substitution).
     """
     target_norm = target.strip().lower()
-    if target.lower().startswith("the "):
+    if target_norm.startswith("the "):
         target_norm = target_norm[4:]
-    max_edits = max(1, min(3, len(target_norm) // 12))
 
+    # Pass 1: exact-after-normalize across all candidates.
+    for cand in candidates:
+        cand_norm = cand.strip().lower()
+        if cand_norm.startswith("the "):
+            cand_norm = cand_norm[4:]
+        if cand_norm == target_norm:
+            return cand
+
+    # Pass 2: fuzzy regex.
+    max_edits = max(1, min(3, len(target_norm) // 12))
     pattern = regex.compile(
         f"^({regex.escape(target_norm)}){{e<={max_edits}}}$",
         regex.IGNORECASE | regex.BESTMATCH,
@@ -80,8 +92,6 @@ def _find_fuzzy_canonical(target: str, candidates: List[str]) -> Optional[str]:
         cand_norm = cand.strip().lower()
         if cand_norm.startswith("the "):
             cand_norm = cand_norm[4:]
-        if cand_norm == target_norm:
-            return cand  # exact-after-normalize
         if pattern.fullmatch(cand_norm):
             return cand
     return None
