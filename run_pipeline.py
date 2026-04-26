@@ -1,17 +1,20 @@
 """End-to-end orchestrator: PDF → entity graph.
 
-Runs the six stages of the pipeline in sequence:
-  1. OCR + combine      (chunked OpenAI batches → combined.md)
-  2. Registry           (pass 1: Anthropic, single call)
-  3. Dedup              (canonical-name + alias dedup, in-memory)
-  4. Canonicalize       (type → supertype mapping, Haiku)
-  5. Profiles submit    (pass 2: Anthropic batch)
-  6. Profiles collect   (poll until done, validate, write entity .md files)
+Runs the nine stages of the pipeline in sequence:
+  1. OCR + combine          (chunked OpenAI batches → combined.md)
+  2. Registry               (pass 1: Anthropic, single call → per-doc registry)
+  3. Dedup                  (canonical-name + alias dedup, in-memory)
+  4. Merge                  (per-doc registry → global registry, with LLM verifier)
+  5. Sweep                  (LLM completeness sweep on doc against global → apply)
+  6. Heuristic              (heuristic candidates → LLM verifier → apply to global)
+  7. Canonicalize           (type → supertype mapping over the global registry, Haiku)
+  8. Profiles submit        (pass 2: Anthropic batch, windowed mode against global)
+  9. Profiles collect       (poll until done, validate, write entity .md files)
 
-Each stage uses the same intermediate paths (under output-root/doc-tag/) so a
-re-run can pick up from any stage via --start-from. The pass-2 batch id is
-persisted to pass2_batch_id.txt so the collect stage can resume after the
-submit stage even in separate invocations.
+Per-doc state lives under output-root/doc-tag/. Global state lives under
+graph-root/ (registry.json, type_supertype_mapping.json, entities/).
+
+Each stage's outputs feed the next; --start-from lets you resume mid-pipeline.
 
 Example:
   python -m planescapeRAG.run_pipeline \\
@@ -29,18 +32,49 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from .canonicalize_types import canonicalize_types
+from .completeness_sweep import apply_suggestions_to_registry, sweep_for_missing
 from .dedup_registry import dedup_registry
 from .extract_profiles import collect_profiles, submit_profiles
 from .extract_registry import extract_registry
-from .ocr import load_corpus_profile
+from .heuristic_entity_candidates import (
+    extract_candidates,
+    filter_against_registry,
+    filter_real_candidates,
+)
+from .merge_registries import _ensure_source_documents, merge_registries
+from .ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
 from .submit_batches import submit_chunked
+from .verify_candidates import apply_decisions, verify_candidates
+from .verify_fuzzy_merges import verify_merges as verify_merges_fn
 
 
-STAGES = ["ocr", "registry", "dedup", "canonicalize", "profiles_submit", "profiles_collect"]
+STAGES = [
+    "ocr",
+    "registry",
+    "dedup",
+    "merge",
+    "sweep",
+    "heuristic",
+    "canonicalize",
+    "profiles_submit",
+    "profiles_collect",
+]
 
 
 def _stage_header(idx: int, total: int, name: str) -> None:
     print(f"\n=== Stage {idx}/{total}: {name} ===", flush=True)
+
+
+def _load_registry(path: Path) -> dict:
+    if path.exists():
+        with path.open() as f:
+            return json.load(f)
+    return {"entities": []}
+
+
+def _save_registry(path: Path, registry: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(registry, indent=2, ensure_ascii=False))
 
 
 def run_pipeline(
@@ -52,18 +86,30 @@ def run_pipeline(
     start_from: str = "ocr",
     chunk_size: int = 50,
     canonicalize_model: str = "claude-haiku-4-5-20251001",
+    pass2_mode: str = "windowed",
+    pass2_no_skip_existing: bool = False,
+    heuristic_top: int = 80,
+    heuristic_min_count: int = 3,
 ) -> None:
     if start_from not in STAGES:
         raise ValueError(f"Unknown stage: {start_from!r}. Valid: {STAGES}")
     start_idx = STAGES.index(start_from)
 
+    # Per-doc paths
     work_dir = output_root / doc_tag
     work_dir.mkdir(parents=True, exist_ok=True)
     pdf_stem = pdf_path.stem.replace(" ", "_")
     combined_md = work_dir / f"{pdf_stem}_combined.md"
-    registry_path = work_dir / "registry.json"
-    supertype_map_path = work_dir / "type_supertype_mapping.json"
+    per_doc_registry = work_dir / "registry.json"
     pass2_batch_file = work_dir / "pass2_batch_id.txt"
+    sweep_path = work_dir / "sweep_suggestions.json"
+    heuristic_candidates_path = work_dir / "heuristic_candidates.json"
+    heuristic_decisions_path = work_dir / "heuristic_decisions.json"
+
+    # Global paths
+    global_registry = graph_root / "registry.json"
+    global_supertype_map = graph_root / "type_supertype_mapping.json"
+    entities_dir = graph_root / "entities"
 
     profile = load_corpus_profile(profile_path)
 
@@ -74,12 +120,7 @@ def run_pipeline(
     if start_idx <= 0:
         _stage_header(1, total, "OCR + combine")
         t0 = time.time()
-        submit_chunked(
-            pdf_path=pdf_path,
-            output_dir=work_dir,
-            profile=profile,
-            chunk_size=chunk_size,
-        )
+        submit_chunked(pdf_path=pdf_path, output_dir=work_dir, profile=profile, chunk_size=chunk_size)
         if not combined_md.exists():
             raise FileNotFoundError(f"Expected combined markdown at {combined_md} after OCR stage")
         print(f"  done ({time.time() - t0:.0f}s)", flush=True)
@@ -88,45 +129,102 @@ def run_pipeline(
     if start_idx <= 1:
         _stage_header(2, total, "pass 1 — entity registry")
         t0 = time.time()
-        extract_registry(
-            document_path=combined_md,
-            output_path=registry_path,
-            profile=profile,
-        )
+        extract_registry(document_path=combined_md, output_path=per_doc_registry, profile=profile)
         print(f"  done ({time.time() - t0:.0f}s)", flush=True)
 
-    # 3. Dedup registry (canonical-name + alias)
+    # 3. Dedup the per-doc registry in place
     if start_idx <= 2:
         _stage_header(3, total, "dedup registry")
         t0 = time.time()
-        with registry_path.open() as f:
-            registry = json.load(f)
+        registry = _load_registry(per_doc_registry)
         registry, stats = dedup_registry(registry)
-        registry_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False))
+        _save_registry(per_doc_registry, registry)
         print(f"  merged {stats['entities_merged']} entities, removed {stats['aliases_removed']} duplicate aliases ({time.time() - t0:.0f}s)", flush=True)
 
-    # 4. Canonicalize types → supertypes
+    # 4. Merge per-doc registry into global registry (with LLM verifier on fuzzy pairs)
     if start_idx <= 3:
-        _stage_header(4, total, "canonicalize types")
+        _stage_header(4, total, "merge into global registry")
+        t0 = time.time()
+        global_reg = _load_registry(global_registry)
+        new_reg = _load_registry(per_doc_registry)
+        _ensure_source_documents(new_reg, doc_tag)
+        merged, stats = merge_registries(global_reg, new_reg, verify_fn=verify_merges_fn)
+        _save_registry(global_registry, merged)
+        print(f"  exact={stats['merged_exact']}  fuzzy_merged={stats['merged_fuzzy']}  fuzzy_split={stats['rejected_fuzzy']}  added_new={stats['added_new']}  total_now={len(merged['entities'])} ({time.time() - t0:.0f}s)", flush=True)
+
+    # 5. LLM completeness sweep against the global registry
+    if start_idx <= 4:
+        _stage_header(5, total, "LLM completeness sweep")
+        t0 = time.time()
+        valid = sweep_for_missing(
+            document_path=combined_md,
+            registry_path=global_registry,
+            output_path=sweep_path,
+            profile=profile,
+        )
+        registry = _load_registry(global_registry)
+        added = apply_suggestions_to_registry(registry, valid, doc_tag)
+        _save_registry(global_registry, registry)
+        print(f"  added {added} entities from sweep (total now: {len(registry['entities'])}) ({time.time() - t0:.0f}s)", flush=True)
+
+    # 6. Heuristic candidates → LLM verifier → apply to global
+    if start_idx <= 5:
+        _stage_header(6, total, "heuristic candidate sweep")
+        t0 = time.time()
+        document = combined_md.read_text()
+        document = apply_ocr_corrections(document, parse_ocr_corrections(profile))
+        registry = _load_registry(global_registry)
+
+        raw = extract_candidates(document)
+        real = filter_real_candidates(raw, document)
+        unmatched = filter_against_registry(real, registry)
+        candidates = sorted(
+            ((n, c) for n, c in unmatched.items() if c >= heuristic_min_count),
+            key=lambda x: -x[1],
+        )[: heuristic_top]
+        heuristic_candidates_path.write_text(json.dumps(
+            [{"name": n, "count": c} for n, c in candidates],
+            indent=2, ensure_ascii=False,
+        ))
+        print(f"  heuristic surfaced {len(candidates)} candidates (top {heuristic_top}, min count {heuristic_min_count})", flush=True)
+
+        if candidates:
+            decisions = verify_candidates(
+                candidates=candidates,
+                document=document,
+                registry=registry,
+                profile=profile,
+            )
+            heuristic_decisions_path.write_text(json.dumps(decisions, indent=2, ensure_ascii=False))
+            stats = apply_decisions(registry, decisions, doc_tag)
+            _save_registry(global_registry, registry)
+            print(f"  applied: skipped={stats['skipped']} merged={stats['merged']} added={stats['added']} (total now: {len(registry['entities'])})", flush=True)
+        print(f"  done ({time.time() - t0:.0f}s)", flush=True)
+
+    # 7. Canonicalize types over the global registry
+    if start_idx <= 6:
+        _stage_header(7, total, "canonicalize types (global)")
         t0 = time.time()
         canonicalize_types(
-            registry_path=registry_path,
-            output_path=supertype_map_path,
+            registry_path=global_registry,
+            output_path=global_supertype_map,
             profile=profile,
             model=canonicalize_model,
         )
         print(f"  done ({time.time() - t0:.0f}s)", flush=True)
 
-    # 5. Pass 2 submit
-    if start_idx <= 4:
-        _stage_header(5, total, "pass 2 submit")
+    # 8. Pass 2 submit (against the global registry)
+    if start_idx <= 7:
+        _stage_header(8, total, "pass 2 submit")
         t0 = time.time()
         batch_id = submit_profiles(
             document_path=combined_md,
-            registry_path=registry_path,
-            supertype_map_path=supertype_map_path,
-            output_dir=graph_root,
+            registry_path=global_registry,
+            supertype_map_path=global_supertype_map,
+            output_dir=entities_dir,
             corpus_profile=profile,
+            mode=pass2_mode,
+            skip_existing=not pass2_no_skip_existing,
         )
         if batch_id:
             pass2_batch_file.write_text(batch_id)
@@ -134,9 +232,9 @@ def run_pipeline(
         else:
             print(f"  no entities to submit (all skipped) ({time.time() - t0:.0f}s)", flush=True)
 
-    # 6. Pass 2 collect
-    if start_idx <= 5:
-        _stage_header(6, total, "pass 2 collect")
+    # 9. Pass 2 collect
+    if start_idx <= 8:
+        _stage_header(9, total, "pass 2 collect")
         t0 = time.time()
         if not pass2_batch_file.exists():
             raise FileNotFoundError(f"No batch ID at {pass2_batch_file} — was the submit stage skipped?")
@@ -147,9 +245,9 @@ def run_pipeline(
             collect_profiles(
                 batch_id=batch_id,
                 document_path=combined_md,
-                registry_path=registry_path,
-                supertype_map_path=supertype_map_path,
-                output_dir=graph_root,
+                registry_path=global_registry,
+                supertype_map_path=global_supertype_map,
+                output_dir=entities_dir,
                 corpus_profile=profile,
             )
             print(f"  done ({time.time() - t0:.0f}s)", flush=True)
@@ -164,10 +262,14 @@ if __name__ == "__main__":
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--doc-tag", type=str, required=True, help="Subdirectory name under output-root for this document's intermediate artifacts.")
     parser.add_argument("--output-root", type=Path, default=Path("planescapeRAG/tmp"))
-    parser.add_argument("--graph-root", type=Path, default=Path("planescapeRAG/graph/entities"))
+    parser.add_argument("--graph-root", type=Path, default=Path("planescapeRAG/graph"), help="Root for global state (registry.json, type_supertype_mapping.json, entities/).")
     parser.add_argument("--start-from", type=str, default="ocr", choices=STAGES, help="Skip stages before this one (their outputs must already exist).")
     parser.add_argument("--chunk-size", type=int, default=50, help="OCR pages per chunk; sized for tier-1 enqueued-token caps.")
     parser.add_argument("--canonicalize-model", type=str, default="claude-haiku-4-5-20251001")
+    parser.add_argument("--pass2-mode", type=str, default="windowed", choices=["fulldoc", "windowed"])
+    parser.add_argument("--pass2-no-skip-existing", action="store_true", help="Re-profile entities even if their .md already exists. Use when the registry has expanded and you want refreshed wikilinks.")
+    parser.add_argument("--heuristic-top", type=int, default=80)
+    parser.add_argument("--heuristic-min-count", type=int, default=3)
     args = parser.parse_args()
 
     run_pipeline(
@@ -179,4 +281,8 @@ if __name__ == "__main__":
         start_from=args.start_from,
         chunk_size=args.chunk_size,
         canonicalize_model=args.canonicalize_model,
+        pass2_mode=args.pass2_mode,
+        pass2_no_skip_existing=args.pass2_no_skip_existing,
+        heuristic_top=args.heuristic_top,
+        heuristic_min_count=args.heuristic_min_count,
     )
