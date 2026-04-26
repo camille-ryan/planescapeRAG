@@ -210,13 +210,14 @@ def _build_registry_payload(registry: dict) -> str:
     return json.dumps(entries, ensure_ascii=False, indent=1)
 
 
-def _build_request(
+def _build_request_fulldoc(
     entity: dict,
     document: str,
     registry_text: str,
     model: str,
     cache_ttl: str,
 ) -> dict:
+    """Full-doc request builder. Caches <document>+<registry> as one big prefix."""
     cached_block = (
         "<document>\n"
         + document
@@ -242,6 +243,119 @@ def _build_request(
                     "role": "user",
                     "content": [
                         {"type": "text", "text": cached_block, "cache_control": {"type": "ephemeral", "ttl": cache_ttl}},
+                        {"type": "text", "text": instruction},
+                    ],
+                }
+            ],
+            "tools": [_SUBMIT_ENTITY_PROFILE_TOOL],
+            "tool_choice": {"type": "tool", "name": "submit_entity_profile"},
+        },
+    }
+
+
+_PAGE_MARKER_BLOCK_RE = re.compile(r"^<!--\s*page\s+(\d+)\s*-->\s*\n?(.*)", re.DOTALL)
+
+
+def _parse_document_paragraphs(document: str) -> List[Tuple[str, Optional[int]]]:
+    """Split a combined-batch markdown document into (paragraph_text, page) tuples.
+
+    Page markers <!-- page N --> set the current page; they don't appear as their
+    own paragraphs in the output. Paragraphs are separated by blank lines.
+    """
+    paragraphs: List[Tuple[str, Optional[int]]] = []
+    current_page: Optional[int] = None
+    for raw in re.split(r"\n\s*\n", document):
+        block = raw.strip()
+        if not block:
+            continue
+        match = _PAGE_MARKER_BLOCK_RE.match(block)
+        if match:
+            current_page = int(match.group(1))
+            remainder = match.group(2).strip()
+            if remainder:
+                paragraphs.append((remainder, current_page))
+        else:
+            paragraphs.append((block, current_page))
+    return paragraphs
+
+
+def _build_windowed_context(
+    paragraphs: List[Tuple[str, Optional[int]]],
+    entity: dict,
+    neighbor_paras: int = 1,
+) -> Optional[str]:
+    """Find paragraphs mentioning the entity (canonical or alias) and return them
+    plus N neighbor paragraphs on each side, with page markers preserved and
+    `[...]` between non-contiguous spans. Returns None if no matches found.
+    """
+    search_terms = [entity["canonical_name"]] + (entity.get("aliases") or [])
+    if not search_terms:
+        return None
+    pattern = re.compile(
+        r"\b(?:" + "|".join(re.escape(t) for t in search_terms) + r")\b",
+        re.IGNORECASE,
+    )
+
+    selected: Set[int] = set()
+    for i, (text, _) in enumerate(paragraphs):
+        if pattern.search(text):
+            for j in range(max(0, i - neighbor_paras), min(len(paragraphs), i + neighbor_paras + 1)):
+                selected.add(j)
+
+    if not selected:
+        return None
+
+    chunks: List[str] = []
+    last_page: Optional[int] = None
+    last_index: Optional[int] = None
+    for i in sorted(selected):
+        text, page = paragraphs[i]
+        if last_index is not None and i > last_index + 1:
+            chunks.append("[...]")
+            last_page = None  # force re-emit page marker after a gap
+        if page is not None and page != last_page:
+            chunks.append(f"<!-- page {page} -->")
+            last_page = page
+        chunks.append(text)
+        last_index = i
+
+    return "\n\n".join(chunks)
+
+
+def _build_request_windowed(
+    entity: dict,
+    paragraphs: List[Tuple[str, Optional[int]]],
+    registry_text: str,
+    model: str,
+    cache_ttl: str,
+    neighbor_paras: int,
+) -> Optional[dict]:
+    """Windowed request builder. Caches system prompt + registry; per-entity
+    context is the windowed paragraphs around mentions of the entity. Returns
+    None if the entity isn't found in the document at all.
+    """
+    context = _build_windowed_context(paragraphs, entity, neighbor_paras=neighbor_paras)
+    if context is None:
+        return None
+    instruction = (
+        f"<context>\n{context}\n</context>\n\n"
+        f"Now generate the profile for: {entity['canonical_name']}\n\n"
+        f"(Type from registry: {entity['type']}. Aliases in registry: "
+        f"{json.dumps(entity.get('aliases', []) or [])}.)"
+    )
+    return {
+        "custom_id": _slug(entity["canonical_name"]),
+        "params": {
+            "model": model,
+            "max_tokens": 4000,
+            "system": [
+                {"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral", "ttl": cache_ttl}},
+            ],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": f"<registry>\n{registry_text}\n</registry>", "cache_control": {"type": "ephemeral", "ttl": cache_ttl}},
                         {"type": "text", "text": instruction},
                     ],
                 }
@@ -369,6 +483,8 @@ def submit_profiles(
     model: Optional[str] = None,
     cache_ttl: str = "1h",
     skip_existing: bool = True,
+    mode: str = "fulldoc",
+    neighbor_paras: int = 1,
 ) -> str:
     settings = Settings()
     if not settings.anthropic_api_key:
@@ -388,9 +504,16 @@ def submit_profiles(
     output_dir.mkdir(parents=True, exist_ok=True)
     registry_text = _build_registry_payload(registry)
 
+    if mode not in {"fulldoc", "windowed"}:
+        raise ValueError(f"Unknown mode: {mode!r}. Use 'fulldoc' or 'windowed'.")
+    paragraphs = _parse_document_paragraphs(document) if mode == "windowed" else None
+    if paragraphs is not None:
+        print(f"Windowed mode: parsed {len(paragraphs)} paragraphs from document; neighbor_paras={neighbor_paras}", flush=True)
+
     # Build one request per entity, skipping any whose output file already exists.
     requests = []
     skipped = 0
+    no_context = 0
     for entity in registry["entities"]:
         supertype = supertype_map.get(entity["type"])
         if supertype is None:
@@ -400,9 +523,17 @@ def submit_profiles(
         if skip_existing and path.exists():
             skipped += 1
             continue
-        requests.append(_build_request(entity, document, registry_text, chosen_model, cache_ttl))
+        if mode == "fulldoc":
+            requests.append(_build_request_fulldoc(entity, document, registry_text, chosen_model, cache_ttl))
+        else:
+            request = _build_request_windowed(entity, paragraphs, registry_text, chosen_model, cache_ttl, neighbor_paras)
+            if request is None:
+                no_context += 1
+                print(f"WARNING: no document mentions found for {entity['canonical_name']!r} ({entity['type']}); skipping in windowed mode.")
+                continue
+            requests.append(request)
 
-    print(f"Building {len(requests)} requests ({skipped} skipped, already exist).")
+    print(f"Building {len(requests)} requests ({skipped} skipped existing, {no_context} skipped no-context).")
     if not requests:
         print("Nothing to submit.")
         return ""
@@ -519,6 +650,8 @@ if __name__ == "__main__":
     submit.add_argument("--model", type=str, default=None)
     submit.add_argument("--cache-ttl", type=str, default="1h", choices=["5m", "1h"])
     submit.add_argument("--no-skip-existing", action="store_true", help="Re-submit entities even if output file exists.")
+    submit.add_argument("--mode", type=str, default="fulldoc", choices=["fulldoc", "windowed"], help="fulldoc: cache the entire document per call (needs >200K context). windowed: per-entity paragraph windowing (fits any model).")
+    submit.add_argument("--neighbor-paras", type=int, default=1, help="In windowed mode, include N paragraphs before and after each match.")
 
     collect = sub.add_parser("collect", help="Poll a batch and write entity files from results.")
     collect.add_argument("batch_id", type=str)
@@ -541,6 +674,8 @@ if __name__ == "__main__":
             model=args.model,
             cache_ttl=args.cache_ttl,
             skip_existing=not args.no_skip_existing,
+            mode=args.mode,
+            neighbor_paras=args.neighbor_paras,
         )
     elif args.cmd == "collect":
         collect_profiles(
