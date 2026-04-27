@@ -7,6 +7,7 @@ import anthropic
 from dotenv import load_dotenv
 
 from .config import Settings
+from .cost import report_call
 from .ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
 
 
@@ -163,6 +164,7 @@ def extract_registry(
     notable_count = sum(1 for e in entities if e.get("notable"))
     print(f"\nNotable: {notable_count}/{len(entities)}")
     print(f"Usage: input={response.usage.input_tokens}  output={response.usage.output_tokens}  stop={response.stop_reason}")
+    report_call("extract_registry", chosen_model, response.usage)
 
     return registry
 

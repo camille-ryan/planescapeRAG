@@ -163,7 +163,7 @@ def sweep_for_missing(
 
     with client.messages.stream(
         model=chosen_model,
-        max_tokens=32000,
+        max_tokens=64000,
         system=_build_system_prompt(profile),
         messages=[{"role": "user", "content": user_message}],
         tools=[_SUGGEST_MISSING_ENTITIES_TOOL],
@@ -215,6 +215,8 @@ def sweep_for_missing(
             notable = "*" if s.get("notable") else " "
             print(f"  {notable} [{s['type']:>10}] {s['canonical_name']}: {s['brief_description']}")
     print(f"\nUsage: input={response.usage.input_tokens} output={response.usage.output_tokens} stop={response.stop_reason}")
+    from .cost import report_call
+    report_call("completeness_sweep", chosen_model, response.usage)
 
     return valid
 

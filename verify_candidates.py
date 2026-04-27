@@ -214,6 +214,8 @@ def verify_candidates(
         raise RuntimeError(f"Model returned non-list decisions: {type(decisions).__name__}")
 
     print(f"Got {len(decisions)} decisions. Usage: input={response.usage.input_tokens} output={response.usage.output_tokens}")
+    from .cost import report_call
+    report_call("verify_candidates", chosen_model, response.usage)
 
     return decisions
 

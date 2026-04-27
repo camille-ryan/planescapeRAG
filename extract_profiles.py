@@ -21,6 +21,13 @@ import regex as fuzzy_regex
 from dotenv import load_dotenv
 
 from .config import Settings
+from .cost import (
+    compute_anthropic_cost,
+    confirm_proceed,
+    estimate_anthropic_batch_cost,
+    log_cost,
+    session_total,
+)
 from .ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
 
 
@@ -366,14 +373,21 @@ def _build_request_windowed(
     }
 
 
-def _build_frontmatter(entity: dict, supertype: str, source_pages: List[int]) -> str:
+def _build_frontmatter(entity: dict, supertype: str, source_pages_per_doc: Dict[str, List[int]]) -> str:
+    """Frontmatter with per-doc source_pages dict.
+
+    Multi-doc-aware: source_pages is a dict keyed by doc_tag, so each ingested
+    document's contribution is tracked separately. source_documents is pulled
+    from the registry entity (also multi-doc).
+    """
     fields = {
         "canonical_name": entity["canonical_name"],
         "type": entity["type"],
         "supertype": supertype,
         "aliases": entity.get("aliases", []) or [],
-        "notable": entity["notable"],
-        "source_pages": sorted(set(source_pages)),
+        "notable": entity.get("notable", False),
+        "source_documents": entity.get("source_documents", []) or [],
+        "source_pages": {tag: sorted(set(pages)) for tag, pages in source_pages_per_doc.items()},
     }
     lines = ["---"]
     for k, v in fields.items():
@@ -459,19 +473,117 @@ def _strip_unresolved_wikilinks(text: str, canonical_names: Set[str]) -> Tuple[s
     return _WIKILINK_RE.sub(sub, text), broken
 
 
-def _assemble_markdown(entity: dict, supertype: str, profile: dict) -> str:
-    frontmatter = _build_frontmatter(entity, supertype, profile["source_pages"])
-    body = [f"# {entity['canonical_name']}", "", profile["description"]]
-    if profile["relationships"]:
-        body.extend(["", "## Relationships", ""])
+_DOC_SECTION_HEADER_RE = re.compile(r"^## Source:\s*(.+?)\s*$")
+
+
+def _render_doc_section_body(profile: dict, doc_tag: str) -> str:
+    """Render the body of one doc's section (description + relationships, no `## Source:` header)."""
+    parts = [profile["description"].strip()]
+    if profile.get("relationships"):
+        parts.extend(["", f"### Relationships from {doc_tag}", ""])
         for rel in profile["relationships"]:
             quote = rel["quote"].strip().replace("\n", " ")
-            body.append(f"- [[{rel['target']}]] — \"{quote}\" (p. {rel['page']})")
-    return frontmatter + "\n\n" + "\n".join(body) + "\n"
+            parts.append(f"- [[{rel['target']}]] — \"{quote}\" (p. {rel['page']})")
+    return "\n".join(parts)
+
+
+def _parse_existing_entity_file(path: Path) -> Tuple[Dict[str, List[int]], List[Tuple[str, str]]]:
+    """Parse an entity file written by _upsert_entity_file.
+
+    Returns (source_pages_per_doc, [(doc_tag, section_body), ...]). For files
+    that don't exist or aren't in the expected format, returns ({}, []).
+    """
+    if not path.exists():
+        return {}, []
+    text = path.read_text()
+    if not text.startswith("---\n"):
+        return {}, []
+    fm_end = text.find("\n---\n", 4)
+    if fm_end == -1:
+        return {}, []
+    frontmatter = text[4:fm_end]
+    body = text[fm_end + 5:]
+
+    source_pages: Dict[str, List[int]] = {}
+    for line in frontmatter.splitlines():
+        if line.startswith("source_pages: "):
+            try:
+                parsed = json.loads(line[len("source_pages: "):])
+                if isinstance(parsed, dict):
+                    source_pages = {k: list(v) for k, v in parsed.items() if isinstance(v, list)}
+            except json.JSONDecodeError:
+                pass
+            break
+
+    sections: List[Tuple[str, str]] = []
+    current_tag: Optional[str] = None
+    current_lines: List[str] = []
+    for line in body.splitlines():
+        match = _DOC_SECTION_HEADER_RE.match(line)
+        if match:
+            if current_tag is not None:
+                sections.append((current_tag, "\n".join(current_lines).strip()))
+            current_tag = match.group(1).strip()
+            current_lines = []
+        elif current_tag is not None:
+            current_lines.append(line)
+    if current_tag is not None:
+        sections.append((current_tag, "\n".join(current_lines).strip()))
+    return source_pages, sections
+
+
+def _upsert_entity_file(
+    path: Path,
+    entity: dict,
+    supertype: str,
+    doc_tag: str,
+    profile: dict,
+) -> None:
+    """Write or update an entity file, replacing only the section for `doc_tag`.
+
+    Per-doc contributions are preserved across multiple ingests. Frontmatter is
+    rebuilt from the registry entity each time so cross-doc fields (aliases,
+    source_documents) stay current.
+    """
+    source_pages_per_doc, sections = _parse_existing_entity_file(path)
+
+    new_section_body = _render_doc_section_body(profile, doc_tag)
+    found = False
+    new_sections: List[Tuple[str, str]] = []
+    for tag, body in sections:
+        if tag == doc_tag:
+            new_sections.append((doc_tag, new_section_body))
+            found = True
+        else:
+            new_sections.append((tag, body))
+    if not found:
+        new_sections.append((doc_tag, new_section_body))
+
+    source_pages_per_doc[doc_tag] = sorted(set(profile.get("source_pages", []) or []))
+
+    frontmatter = _build_frontmatter(entity, supertype, source_pages_per_doc)
+    body_lines = [f"# {entity['canonical_name']}"]
+    for tag, section_body in new_sections:
+        body_lines.extend(["", f"## Source: {tag}", "", section_body])
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(frontmatter + "\n\n" + "\n".join(body_lines) + "\n")
 
 
 def _output_path(output_dir: Path, supertype: str, entity: dict) -> Path:
     return output_dir / supertype / f"{_slug(entity['canonical_name'])}.md"
+
+
+def _file_has_doc_section(path: Path, doc_tag: str) -> bool:
+    """True if the entity file at `path` already has a `## Source: <doc_tag>` section."""
+    if not path.exists():
+        return False
+    try:
+        text = path.read_text()
+    except OSError:
+        return False
+    needle = f"\n## Source: {doc_tag}\n"
+    return needle in ("\n" + text) or text.startswith(f"## Source: {doc_tag}\n")
 
 
 def submit_profiles(
@@ -479,12 +591,15 @@ def submit_profiles(
     registry_path: Path,
     supertype_map_path: Path,
     output_dir: Path,
+    doc_tag: str,
     corpus_profile: Optional[Dict[str, str]] = None,
     model: Optional[str] = None,
     cache_ttl: str = "1h",
     skip_existing: bool = True,
     mode: str = "fulldoc",
     neighbor_paras: int = 1,
+    cost_threshold_usd: float = 1.00,
+    auto_yes: bool = False,
 ) -> str:
     settings = Settings()
     if not settings.anthropic_api_key:
@@ -520,7 +635,7 @@ def submit_profiles(
             print(f"WARNING: no supertype for type={entity['type']!r}; skipping {entity['canonical_name']}")
             continue
         path = _output_path(output_dir, supertype, entity)
-        if skip_existing and path.exists():
+        if skip_existing and _file_has_doc_section(path, doc_tag):
             skipped += 1
             continue
         if mode == "fulldoc":
@@ -538,9 +653,26 @@ def submit_profiles(
         print("Nothing to submit.")
         return ""
 
+    # Pre-flight cost estimate. Prompt for confirmation if above threshold.
+    estimate = estimate_anthropic_batch_cost(
+        requests, model=chosen_model, is_batch=True, cache_ttl=cache_ttl,
+    )
+    if not confirm_proceed(estimate, f"pass-2 submit ({mode})", threshold_usd=cost_threshold_usd, auto_yes=auto_yes):
+        print("Aborted by user.")
+        return ""
+
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     batch = client.messages.batches.create(requests=requests)
     print(f"Submitted batch: {batch.id}  status={batch.processing_status}  count={len(requests)}")
+    # Log the estimate as informational only (cost_usd=None so it doesn't double-count
+    # when collect logs actual spend).
+    log_cost(
+        f"pass2_submit_estimate ({mode})",
+        chosen_model,
+        cost_usd=None,
+        is_batch=True,
+        details={"batch_id": batch.id, "n_requests": len(requests), "estimate_usd": estimate.get("cost_usd"), **{k: v for k, v in estimate.items() if k != "cost_usd"}},
+    )
     return batch.id
 
 
@@ -550,6 +682,7 @@ def collect_profiles(
     registry_path: Path,
     supertype_map_path: Path,
     output_dir: Path,
+    doc_tag: str,
     corpus_profile: Optional[Dict[str, str]] = None,
 ) -> None:
     settings = Settings()
@@ -583,6 +716,9 @@ def collect_profiles(
     fuzzy_rescued_total = 0
     broken_link_totals = 0
     failures: List[str] = []
+    total_cost = 0.0
+    total_input = total_output = total_cache_write = total_cache_read = 0
+    cost_model = None
 
     for result in client.messages.batches.results(batch_id):
         slug = result.custom_id
@@ -596,6 +732,18 @@ def collect_profiles(
             continue
 
         message = result.result.message
+        if cost_model is None:
+            cost_model = getattr(message, "model", None)
+        usage = getattr(message, "usage", None)
+        if usage is not None:
+            total_input += getattr(usage, "input_tokens", 0) or 0
+            total_output += getattr(usage, "output_tokens", 0) or 0
+            total_cache_write += getattr(usage, "cache_creation_input_tokens", 0) or 0
+            total_cache_read += getattr(usage, "cache_read_input_tokens", 0) or 0
+            cost = compute_anthropic_cost(usage, cost_model or "", is_batch=True, cache_ttl="1h")
+            if cost:
+                total_cost += cost
+
         tool_use = next(
             (b for b in message.content if b.type == "tool_use" and b.name == "submit_entity_profile"),
             None,
@@ -605,8 +753,16 @@ def collect_profiles(
             continue
 
         profile = dict(tool_use.input)
+        # Defensive defaults for fields the schema marks as required but the model
+        # occasionally omits (Haiku in particular sometimes drops source_pages).
+        profile.setdefault("description", "")
+        profile.setdefault("source_pages", [])
+        profile.setdefault("relationships", [])
+        if not isinstance(profile["source_pages"], list):
+            profile["source_pages"] = []
+
         profile["relationships"], drops, rescued = _filter_relationships(
-            profile.get("relationships", []),
+            profile["relationships"],
             entity["canonical_name"],
             canonical_names,
             document,
@@ -622,14 +778,30 @@ def collect_profiles(
 
         supertype = supertype_map[entity["type"]]
         path = _output_path(output_dir, supertype, entity)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(_assemble_markdown(entity, supertype, profile))
+        _upsert_entity_file(path, entity, supertype, doc_tag, profile)
         written += 1
 
     print(f"\nWrote {written} entity files under {output_dir}")
     print(f"Dropped relationships: self={drop_totals['self']}  unknown_target={drop_totals['unknown_target']}  quote_not_in_doc={drop_totals['quote_not_in_doc']}  malformed={drop_totals['malformed']}")
     print(f"Quotes rescued via fuzzy match: {fuzzy_rescued_total}")
     print(f"Stripped unresolved wikilinks in descriptions: {broken_link_totals}")
+    if cost_model:
+        log_cost(
+            "pass2_collect",
+            cost_model,
+            cost_usd=total_cost,
+            is_batch=True,
+            details={
+                "batch_id": batch_id,
+                "doc_tag": doc_tag,
+                "n_results": written,
+                "input_tokens": total_input,
+                "output_tokens": total_output,
+                "cache_write_tokens": total_cache_write,
+                "cache_read_tokens": total_cache_read,
+            },
+        )
+        print(f"Batch cost: ${total_cost:.2f}  |  session total: ${session_total():.2f}", flush=True)
     if failures:
         print(f"\n{len(failures)} request failures:")
         for f in failures[:20]:
@@ -646,12 +818,15 @@ if __name__ == "__main__":
     submit.add_argument("--registry", type=Path, required=True)
     submit.add_argument("--supertype-map", type=Path, required=True)
     submit.add_argument("--output-dir", type=Path, required=True)
+    submit.add_argument("--doc-tag", type=str, required=True, help="Doc tag for the per-source section in entity files; controls skip_existing logic.")
     submit.add_argument("--profile", type=Path, default=None, help="Optional corpus profile (used for OCR corrections).")
     submit.add_argument("--model", type=str, default=None)
     submit.add_argument("--cache-ttl", type=str, default="1h", choices=["5m", "1h"])
     submit.add_argument("--no-skip-existing", action="store_true", help="Re-submit entities even if output file exists.")
     submit.add_argument("--mode", type=str, default="fulldoc", choices=["fulldoc", "windowed"], help="fulldoc: cache the entire document per call (needs >200K context). windowed: per-entity paragraph windowing (fits any model).")
     submit.add_argument("--neighbor-paras", type=int, default=1, help="In windowed mode, include N paragraphs before and after each match.")
+    submit.add_argument("--cost-threshold", type=float, default=1.00, help="USD threshold above which a confirmation prompt appears before submitting.")
+    submit.add_argument("--yes", action="store_true", help="Skip the cost-confirmation prompt (for unattended runs).")
 
     collect = sub.add_parser("collect", help="Poll a batch and write entity files from results.")
     collect.add_argument("batch_id", type=str)
@@ -659,6 +834,7 @@ if __name__ == "__main__":
     collect.add_argument("--registry", type=Path, required=True)
     collect.add_argument("--supertype-map", type=Path, required=True)
     collect.add_argument("--output-dir", type=Path, required=True)
+    collect.add_argument("--doc-tag", type=str, required=True, help="Doc tag for the per-source section header in entity files.")
     collect.add_argument("--profile", type=Path, default=None, help="Optional corpus profile (used for OCR corrections).")
 
     args = parser.parse_args()
@@ -670,12 +846,15 @@ if __name__ == "__main__":
             registry_path=args.registry,
             supertype_map_path=args.supertype_map,
             output_dir=args.output_dir,
+            doc_tag=args.doc_tag,
             corpus_profile=corpus_profile,
             model=args.model,
             cache_ttl=args.cache_ttl,
             skip_existing=not args.no_skip_existing,
             mode=args.mode,
             neighbor_paras=args.neighbor_paras,
+            cost_threshold_usd=args.cost_threshold,
+            auto_yes=args.yes,
         )
     elif args.cmd == "collect":
         collect_profiles(
@@ -684,5 +863,6 @@ if __name__ == "__main__":
             registry_path=args.registry,
             supertype_map_path=args.supertype_map,
             output_dir=args.output_dir,
+            doc_tag=args.doc_tag,
             corpus_profile=corpus_profile,
         )

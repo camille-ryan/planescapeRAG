@@ -88,6 +88,8 @@ def run_pipeline(
     canonicalize_model: str = "claude-haiku-4-5-20251001",
     pass2_mode: str = "windowed",
     pass2_no_skip_existing: bool = False,
+    pass2_cost_threshold_usd: float = 1.00,
+    auto_yes: bool = False,
     heuristic_top: int = 80,
     heuristic_min_count: int = 3,
 ) -> None:
@@ -222,9 +224,12 @@ def run_pipeline(
             registry_path=global_registry,
             supertype_map_path=global_supertype_map,
             output_dir=entities_dir,
+            doc_tag=doc_tag,
             corpus_profile=profile,
             mode=pass2_mode,
             skip_existing=not pass2_no_skip_existing,
+            cost_threshold_usd=pass2_cost_threshold_usd,
+            auto_yes=auto_yes,
         )
         if batch_id:
             pass2_batch_file.write_text(batch_id)
@@ -248,6 +253,7 @@ def run_pipeline(
                 registry_path=global_registry,
                 supertype_map_path=global_supertype_map,
                 output_dir=entities_dir,
+                doc_tag=doc_tag,
                 corpus_profile=profile,
             )
             print(f"  done ({time.time() - t0:.0f}s)", flush=True)
@@ -268,6 +274,8 @@ if __name__ == "__main__":
     parser.add_argument("--canonicalize-model", type=str, default="claude-haiku-4-5-20251001")
     parser.add_argument("--pass2-mode", type=str, default="windowed", choices=["fulldoc", "windowed"])
     parser.add_argument("--pass2-no-skip-existing", action="store_true", help="Re-profile entities even if their .md already exists. Use when the registry has expanded and you want refreshed wikilinks.")
+    parser.add_argument("--pass2-cost-threshold", type=float, default=1.00, help="USD threshold above which the pass-2 submit prompts for confirmation.")
+    parser.add_argument("--yes", action="store_true", help="Skip cost-confirmation prompts (for unattended runs).")
     parser.add_argument("--heuristic-top", type=int, default=80)
     parser.add_argument("--heuristic-min-count", type=int, default=3)
     args = parser.parse_args()
@@ -283,6 +291,8 @@ if __name__ == "__main__":
         canonicalize_model=args.canonicalize_model,
         pass2_mode=args.pass2_mode,
         pass2_no_skip_existing=args.pass2_no_skip_existing,
+        pass2_cost_threshold_usd=args.pass2_cost_threshold,
+        auto_yes=args.yes,
         heuristic_top=args.heuristic_top,
         heuristic_min_count=args.heuristic_min_count,
     )

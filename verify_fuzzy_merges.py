@@ -143,6 +143,9 @@ def verify_merges(
     if tool_use is None:
         raise RuntimeError(f"Model did not call verify_merges. Stop: {response.stop_reason}")
 
+    from .cost import report_call
+    report_call("verify_fuzzy_merges", model, response.usage)
+
     raw_decisions = tool_use.input.get("decisions", [])
     if not isinstance(raw_decisions, list):
         raise RuntimeError(f"Model returned non-list decisions: {type(raw_decisions).__name__}")
