@@ -329,23 +329,68 @@ def _build_windowed_context(
     return "\n\n".join(chunks)
 
 
+def _build_local_registry_payload(context: str, registry: dict, exclude_canonical: Optional[str] = None) -> str:
+    """Filter the global registry to entities whose canonical_name or alias is
+    word-boundary mentioned in `context`. Same JSON shape as the global payload.
+
+    This is the right shape for any registry that gets large enough that
+    sending the whole thing per request becomes wasteful or impossible.
+    """
+    context_lower = context.lower()
+    relevant = []
+    seen: Set[str] = set()
+    for entity in registry["entities"]:
+        canon = entity["canonical_name"]
+        if canon == exclude_canonical or canon in seen:
+            continue
+        names = [canon] + (entity.get("aliases") or [])
+        for name in names:
+            if not name:
+                continue
+            try:
+                if re.search(rf"\b{re.escape(name)}\b", context_lower, re.IGNORECASE):
+                    relevant.append(entity)
+                    seen.add(canon)
+                    break
+            except re.error:
+                continue
+    entries = [
+        {
+            "canonical_name": e["canonical_name"],
+            "type": e["type"],
+            "aliases": e.get("aliases", []) or [],
+            "brief_description": e["brief_description"],
+        }
+        for e in relevant
+    ]
+    return json.dumps(entries, ensure_ascii=False, indent=1)
+
+
 def _build_request_windowed(
     entity: dict,
     paragraphs: List[Tuple[str, Optional[int]]],
-    registry_text: str,
+    registry: dict,
     model: str,
     cache_ttl: str,
     neighbor_paras: int,
 ) -> Optional[dict]:
-    """Windowed request builder. Caches system prompt + registry; per-entity
-    context is the windowed paragraphs around mentions of the entity. Returns
-    None if the entity isn't found in the document at all.
+    """Windowed request builder with per-entity local registry.
+
+    For each entity, gathers windowed paragraphs and builds a registry slice
+    containing only entities whose names appear in those paragraphs. No cache
+    control: the per-request payload is small enough that caching saves
+    little, and removes a known-flaky variable (batch cache writes were
+    accumulating ~10x estimate on the PoL run).
     """
     context = _build_windowed_context(paragraphs, entity, neighbor_paras=neighbor_paras)
     if context is None:
         return None
+    local_registry_text = _build_local_registry_payload(
+        context, registry, exclude_canonical=entity["canonical_name"]
+    )
     instruction = (
         f"<context>\n{context}\n</context>\n\n"
+        f"<registry>\n{local_registry_text}\n</registry>\n\n"
         f"Now generate the profile for: {entity['canonical_name']}\n\n"
         f"(Type from registry: {entity['type']}. Aliases in registry: "
         f"{json.dumps(entity.get('aliases', []) or [])}.)"
@@ -356,13 +401,12 @@ def _build_request_windowed(
             "model": model,
             "max_tokens": 4000,
             "system": [
-                {"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral", "ttl": cache_ttl}},
+                {"type": "text", "text": _SYSTEM_PROMPT},
             ],
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": f"<registry>\n{registry_text}\n</registry>", "cache_control": {"type": "ephemeral", "ttl": cache_ttl}},
                         {"type": "text", "text": instruction},
                     ],
                 }
@@ -574,6 +618,34 @@ def _output_path(output_dir: Path, supertype: str, entity: dict) -> Path:
     return output_dir / supertype / f"{_slug(entity['canonical_name'])}.md"
 
 
+def _batch_already_billed(batch_id: str) -> bool:
+    """True if cost_log.jsonl already has a pass2_collect entry billing this batch_id.
+
+    Guards against double-counting when re-collecting an old batch (typical when
+    the orchestrator runs profiles_collect against pass2_batch_id.txt that
+    references a batch from a prior session).
+    """
+    log_path = Path("planescapeRAG/tmp/cost_log.jsonl")
+    if not log_path.exists():
+        return False
+    try:
+        for line in log_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            entry = json.loads(line)
+            if (
+                entry.get("operation") == "pass2_collect"
+                and entry.get("details", {}).get("batch_id") == batch_id
+                and isinstance(entry.get("cost_usd"), (int, float))
+                and entry["cost_usd"] > 0
+            ):
+                return True
+    except (OSError, json.JSONDecodeError):
+        pass
+    return False
+
+
 def _file_has_doc_section(path: Path, doc_tag: str) -> bool:
     """True if the entity file at `path` already has a `## Source: <doc_tag>` section."""
     if not path.exists():
@@ -641,7 +713,7 @@ def submit_profiles(
         if mode == "fulldoc":
             requests.append(_build_request_fulldoc(entity, document, registry_text, chosen_model, cache_ttl))
         else:
-            request = _build_request_windowed(entity, paragraphs, registry_text, chosen_model, cache_ttl, neighbor_paras)
+            request = _build_request_windowed(entity, paragraphs, registry, chosen_model, cache_ttl, neighbor_paras)
             if request is None:
                 no_context += 1
                 print(f"WARNING: no document mentions found for {entity['canonical_name']!r} ({entity['type']}); skipping in windowed mode.")
@@ -786,22 +858,28 @@ def collect_profiles(
     print(f"Quotes rescued via fuzzy match: {fuzzy_rescued_total}")
     print(f"Stripped unresolved wikilinks in descriptions: {broken_link_totals}")
     if cost_model:
-        log_cost(
-            "pass2_collect",
-            cost_model,
-            cost_usd=total_cost,
-            is_batch=True,
-            details={
-                "batch_id": batch_id,
-                "doc_tag": doc_tag,
-                "n_results": written,
-                "input_tokens": total_input,
-                "output_tokens": total_output,
-                "cache_write_tokens": total_cache_write,
-                "cache_read_tokens": total_cache_read,
-            },
-        )
-        print(f"Batch cost: ${total_cost:.2f}  |  session total: ${session_total():.2f}", flush=True)
+        # Guard against double-counting: if this batch_id was already billed
+        # (typical when re-collecting an old batch via --start-from), don't log again.
+        already = _batch_already_billed(batch_id)
+        if already:
+            print(f"Batch {batch_id} already in cost log; skipping cost log entry to avoid double-count.", flush=True)
+        else:
+            log_cost(
+                "pass2_collect",
+                cost_model,
+                cost_usd=total_cost,
+                is_batch=True,
+                details={
+                    "batch_id": batch_id,
+                    "doc_tag": doc_tag,
+                    "n_results": written,
+                    "input_tokens": total_input,
+                    "output_tokens": total_output,
+                    "cache_write_tokens": total_cache_write,
+                    "cache_read_tokens": total_cache_read,
+                },
+            )
+            print(f"Batch cost: ${total_cost:.2f}  |  session total: ${session_total():.2f}", flush=True)
     if failures:
         print(f"\n{len(failures)} request failures:")
         for f in failures[:20]:
