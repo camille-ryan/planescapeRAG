@@ -117,15 +117,24 @@ class OpenAIOCR:
             raise ValueError("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set in .env for S3 upload.")
 
         from pdf2image import convert_from_path
-        # Explicit region + SigV4 signing. Without these, boto3 falls back to
-        # SigV2 query-string presigned URLs, which S3 rejects with 403 on
-        # buckets that enforce v4-only signing (most us-west-2 buckets).
+        # Critical: explicit regional endpoint + virtual addressing. Without
+        # these, boto3 generates presigned URLs against the global host
+        # (BUCKET.s3.amazonaws.com), which S3 sometimes serves directly and
+        # sometimes 307-redirects to the regional host. The redirect causes
+        # SigV4 SignatureDoesNotMatch because the signature is bound to the
+        # original host name. Failure rate was ~30-80% for non-trivial doc
+        # uploads. With the regional endpoint, URLs are signed for the
+        # bucket's home region directly — no redirect, no signature mismatch.
         s3_client = boto3.client(
             's3',
             aws_access_key_id=self.settings.aws_access_key_id,
             aws_secret_access_key=self.settings.aws_secret_access_key,
             region_name=self.settings.aws_region,
-            config=BotoConfig(signature_version='s3v4'),
+            endpoint_url=f"https://s3.{self.settings.aws_region}.amazonaws.com",
+            config=BotoConfig(
+                signature_version='s3v4',
+                s3={'addressing_style': 'virtual'},
+            ),
         )
 
         prompt = build_ocr_prompt(profile)
