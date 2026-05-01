@@ -26,8 +26,10 @@ Example:
 
 import argparse
 import json
+import re
 import time
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -79,20 +81,36 @@ def _save_registry(path: Path, registry: dict) -> None:
     path.write_text(json.dumps(registry, indent=2, ensure_ascii=False))
 
 
-def _register_doc_source(doc_tag: str, pdf_path: Path, project_root: Path) -> None:
-    """Add or refresh the doc_tag → PDF mapping in chatbot/doc_sources.json so
-    the page-image preview endpoint can render source pages for citations from
-    this doc once PLANESCAPE_SHOW_PAGES=1 is set on the API."""
+_TSR_PREFIX_RE = re.compile(r"^TSR\s*\d+\s+")
+
+
+def _infer_title_from_pdf(pdf_path: Path) -> str:
+    """Best-effort pretty title for a PDF. Strips the 'TSR XXXX ' product-code prefix."""
+    return _TSR_PREFIX_RE.sub("", pdf_path.stem).strip()
+
+
+def _register_doc_source(
+    doc_tag: str,
+    pdf_path: Path,
+    project_root: Path,
+    *,
+    source_type: str = "canonical",
+    title: Optional[str] = None,
+) -> None:
+    """Add or refresh the doc_tag entry in chatbot/doc_sources.json. The new
+    schema stores an object per doc_tag with `pdf`, `type`, and `title` fields.
+    Existing entries with bare-string values (legacy format) are upgraded in place."""
     sources_path = project_root / "chatbot" / "doc_sources.json"
     if sources_path.exists():
         data = json.loads(sources_path.read_text())
     else:
         data = {
             "_comment": (
-                "Maps doc_tag (used in `## Source: <doc_tag>` headers) to the "
-                "source PDF. Paths are resolved relative to the planescapeRAG/ "
-                "package directory. Used by /page/{doc_tag}/{page} when "
-                "PLANESCAPE_SHOW_PAGES=1."
+                "Maps doc_tag (used in `## Source: <doc_tag>` headers) to a record "
+                "describing the source. Paths are relative to the planescapeRAG/ "
+                "package directory. `type` is 'canonical' or 'adventure' — the "
+                "chatbot frames adventure-sourced facts as narrative content. "
+                "Used by /page/{doc_tag}/{page} when PLANESCAPE_SHOW_PAGES=1."
             ),
         }
 
@@ -102,10 +120,19 @@ def _register_doc_source(doc_tag: str, pdf_path: Path, project_root: Path) -> No
     except ValueError:
         path_str = str(pdf_path.resolve())
 
-    if data.get(doc_tag) != path_str:
-        data[doc_tag] = path_str
+    entry = {
+        "pdf": path_str,
+        "type": source_type,
+        "title": title or _infer_title_from_pdf(pdf_path),
+    }
+    if data.get(doc_tag) != entry:
+        data[doc_tag] = entry
         sources_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-        print(f"  registered {doc_tag} → {path_str} in doc_sources.json", flush=True)
+        print(
+            f"  registered {doc_tag} → {path_str} "
+            f"[type={source_type}, title={entry['title']!r}] in doc_sources.json",
+            flush=True,
+        )
 
 
 def run_pipeline(
@@ -123,6 +150,8 @@ def run_pipeline(
     auto_yes: bool = False,
     heuristic_top: int = 80,
     heuristic_min_count: int = 3,
+    source_type: str = "canonical",
+    source_title: Optional[str] = None,
 ) -> None:
     if start_from not in STAGES:
         raise ValueError(f"Unknown stage: {start_from!r}. Valid: {STAGES}")
@@ -297,7 +326,10 @@ def run_pipeline(
         project_root = graph_root.parent
         chatbot_index_dir = project_root / "chatbot" / "index"
 
-        _register_doc_source(doc_tag, pdf_path, project_root)
+        _register_doc_source(
+            doc_tag, pdf_path, project_root,
+            source_type=source_type, title=source_title,
+        )
 
         if not entities_dir.exists():
             print(f"  skipped: no entities at {entities_dir} yet", flush=True)
@@ -334,6 +366,16 @@ if __name__ == "__main__":
     parser.add_argument("--yes", action="store_true", help="Skip cost-confirmation prompts (for unattended runs).")
     parser.add_argument("--heuristic-top", type=int, default=80)
     parser.add_argument("--heuristic-min-count", type=int, default=3)
+    parser.add_argument(
+        "--source-type", type=str, default="canonical", choices=["canonical", "adventure"],
+        help="'canonical' = setting reference (boxed sets, accessories). "
+             "'adventure' = adventure module — chatbot will frame these as narrative content.",
+    )
+    parser.add_argument(
+        "--source-title", type=str, default=None,
+        help="Pretty title for citations (e.g. 'The Great Modron March'). "
+             "Defaults to PDF stem with the leading 'TSR XXXX ' prefix stripped.",
+    )
     args = parser.parse_args()
 
     run_pipeline(
@@ -351,4 +393,6 @@ if __name__ == "__main__":
         auto_yes=args.yes,
         heuristic_top=args.heuristic_top,
         heuristic_min_count=args.heuristic_min_count,
+        source_type=args.source_type,
+        source_title=args.source_title,
     )

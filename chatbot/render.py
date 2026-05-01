@@ -7,7 +7,7 @@
 """
 
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import markdown as md_lib
 
@@ -17,6 +17,34 @@ from .retrieve import RetrievalResult
 _WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 _CITATION_RE = re.compile(r"\(([a-zA-Z][\w]*),\s*p\.\s*(\d+)\)")
 _LEADING_H1_RE = re.compile(r"^# .*\n+")
+
+
+def _lookup_book(meta: Optional[dict], abs_page: int) -> Optional[Tuple[str, int]]:
+    """Map a merged-PDF page number to (book_name, page_within_book) when the
+    doc's metadata has a `books` array describing physical-book boundaries.
+    Returns None when no books are defined or the page doesn't fall in any range."""
+    if not meta:
+        return None
+    for b in meta.get("books") or []:
+        start, end = b.get("start", 0), b.get("end", 0)
+        if start and end and start <= abs_page <= end:
+            return (b["name"], abs_page - start + 1)
+    return None
+
+
+def _citation_display(tag: str, abs_page: int, doc_metadata: Optional[Dict[str, dict]]) -> str:
+    """Render a citation for human eyes. Order of preference:
+    1. (book name, page-within-book) when doc has `books` and abs_page falls in a range
+    2. (pretty title, abs_page) when doc has a title
+    3. (raw doc_tag, abs_page) as a last resort
+    """
+    meta = doc_metadata.get(tag) if doc_metadata else None
+    book = _lookup_book(meta, abs_page)
+    if book:
+        return f"({book[0]}, p. {book[1]})"
+    if meta and meta.get("title"):
+        return f"({meta['title']}, p. {abs_page})"
+    return f"({tag}, p. {abs_page})"
 
 
 def linkify_wikilinks(text: str, name_to_id: Dict[str, str]) -> str:
@@ -39,17 +67,31 @@ def linkify_wikilinks(text: str, name_to_id: Dict[str, str]) -> str:
     return _WIKILINK_RE.sub(repl, text)
 
 
-def linkify_citations(text: str, api_base: str, show_pages: bool) -> str:
-    """Replace `(doc_tag, p. N)` with an `<a target=_blank>` to the page image.
-    No-op when show_pages is False (the link target would 404)."""
-    if not show_pages:
-        return text
+def linkify_citations(
+    text: str,
+    api_base: str,
+    show_pages: bool,
+    doc_metadata: Optional[Dict[str, dict]] = None,
+) -> str:
+    """Replace `(doc_tag, p. N)` with a human-readable citation.
+
+    The display text is computed from doc_metadata: book-name + within-book page
+    when the doc has a `books` array (e.g. for boxed sets), pretty title + abs
+    page otherwise, raw `(doc_tag, p. N)` as a last resort.
+
+    When show_pages is True, the citation is wrapped in an `<a target=_blank>`
+    pointing to /page/{doc_tag}/{abs_page} — the URL still uses the absolute
+    page so the page-image endpoint resolves correctly. When False, just text.
+    """
     def repl(m: re.Match) -> str:
-        tag, page = m.group(1), m.group(2)
-        return (
-            f'<a href="{api_base}/page/{tag}/{page}" '
-            f'target="_blank" class="citation">({tag}, p. {page})</a>'
-        )
+        tag, abs_page = m.group(1), int(m.group(2))
+        display = _citation_display(tag, abs_page, doc_metadata)
+        if show_pages:
+            return (
+                f'<a href="{api_base}/page/{tag}/{abs_page}" '
+                f'target="_blank" class="citation">{display}</a>'
+            )
+        return display
     return _CITATION_RE.sub(repl, text)
 
 
@@ -60,6 +102,7 @@ def render_body_to_html(
     show_pages: bool,
     *,
     strip_leading_h1: bool = False,
+    doc_metadata: Optional[Dict[str, dict]] = None,
 ) -> str:
     """Linkify wikilinks + citations, then convert markdown to HTML.
 
@@ -70,7 +113,7 @@ def render_body_to_html(
     if strip_leading_h1:
         text = _LEADING_H1_RE.sub("", text, count=1)
     text = linkify_wikilinks(text, name_to_id)
-    text = linkify_citations(text, api_base, show_pages)
+    text = linkify_citations(text, api_base, show_pages, doc_metadata=doc_metadata)
     md = md_lib.Markdown(extensions=["extra", "sane_lists"])
     return md.convert(text)
 

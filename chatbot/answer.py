@@ -4,12 +4,18 @@ Hands the retrieved entity bodies to Claude with a system prompt requiring
 inline `(doc_tag, p. N)` citations grounded in the bullets we provide. Defaults
 to Haiku 4.5 since RAG-with-citations is well within its capability and cost is
 negligible; --model flag bumps to Sonnet for harder queries.
+
+When `doc_metadata` is supplied (mapping doc_tag → {type, title, ...}), each
+`## Source: <doc_tag>` and `### Relationships from <doc_tag>` header in the
+context block is annotated with `[canonical]` or `[adventure: "<title>"]`.
+The system prompt tells the model to frame adventure-sourced facts narratively.
 """
 
 import argparse
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import anthropic
 
@@ -27,13 +33,22 @@ The entity files are excerpts from TSR sourcebooks. Each entity may have multipl
 
     - [[Other Entity]] — "verbatim quote" (p. N)
 
+Each `## Source:` and `### Relationships from` header is annotated with one of:
+- `[canonical]` — content from a setting reference (boxed sets, accessories). Treat as enduring world fact.
+- `[adventure: "<adventure title>"]` — content from a published adventure module. Treat as narrative events specific to that adventure, not as enduring world fact.
+
 Rules:
 - Ground every factual claim in the provided source text. If the question cannot be answered from the context, say so clearly — do not invent.
 - Cite each claim inline as `(<doc_tag>, p. N)`. The doc_tag is shown in section headers; the page number is at the end of each bullet. Use the EXACT doc_tag string as it appears in the headers, with no modifications.
 - When you reference an entity that appears in the provided context, write its name as a wikilink: `[[Canonical Name]]`. Use the canonical name from the entity header (the `# Heading` at the top of each entity block). The downstream UI renders these as clickable links into the entity dossier.
+- For facts drawn from `[canonical]` sections, state them directly as world fact.
+- For facts drawn from `[adventure: "<title>"]` sections, frame them as narrative events using phrasing like "In the adventure *<title>*, ..." or "During the events of *<title>*, ...". Cite as `(<doc_tag>, p. N)` regardless. This makes clear to the reader that the fact describes specific in-fiction events rather than enduring world fact.
 - Be concise. Stay close to the source; do not editorialize.
 - When the same entity appears across multiple `## Source:` sections, draw on whichever source(s) best answer the question and cite accordingly.
 """
+
+
+_SOURCE_HEADER_RE = re.compile(r"^(##|###)\s*(Source|Relationships from)\s*:?\s*(\S+)\s*$", re.MULTILINE)
 
 
 @dataclass
@@ -45,20 +60,50 @@ class AnswerResult:
     retrieval: RetrievalResult
 
 
-def build_context(result: RetrievalResult) -> str:
-    """Render the retrieval result as a prompt context block."""
+def annotate_source_headers(body: str, doc_metadata: Optional[Dict[str, dict]]) -> str:
+    """Append `[canonical]` or `[adventure: "<title>"]` to each `## Source: tag`
+    and `### Relationships from tag` line so the model can see source-type per
+    section. No-op when doc_metadata is None or empty."""
+    if not doc_metadata:
+        return body
+
+    def repl(m: re.Match) -> str:
+        prefix, kind, tag = m.group(1), m.group(2), m.group(3)
+        meta = doc_metadata.get(tag)
+        if meta is None:
+            return m.group(0)
+        if meta.get("type") == "adventure":
+            title = meta.get("title", tag)
+            badge = f'[adventure: "{title}"]'
+        else:
+            badge = "[canonical]"
+        # "Source" takes a colon; "Relationships from" already contains the
+        # preposition, so just append the tag.
+        if kind == "Source":
+            return f"{prefix} Source: {tag} {badge}"
+        return f"{prefix} Relationships from {tag} {badge}"
+
+    return _SOURCE_HEADER_RE.sub(repl, body)
+
+
+def build_context(
+    result: RetrievalResult,
+    doc_metadata: Optional[Dict[str, dict]] = None,
+) -> str:
+    """Render the retrieval result as a prompt context block, annotating each
+    entity body's source headers with their canonical/adventure type tag."""
     out: list[str] = []
     if result.primaries:
         out.append("=== Top retrieved entities (by embedding similarity) ===\n")
         for p in result.primaries:
             out.append(f"--- ENTITY: {p.canonical_name} ({p.type}, similarity={p.similarity:.3f}) ---")
-            out.append(p.body.rstrip())
+            out.append(annotate_source_headers(p.body, doc_metadata).rstrip())
             out.append("")
     if result.expansions:
         out.append("=== 1-hop expansions (graph-linked from primaries) ===\n")
         for e in result.expansions:
             out.append(f"--- ENTITY: {e.canonical_name} ({e.type}, linked from {e.expanded_from}) ---")
-            out.append(e.body.rstrip())
+            out.append(annotate_source_headers(e.body, doc_metadata).rstrip())
             out.append("")
     return "\n".join(out)
 
@@ -69,11 +114,15 @@ def answer_question(
     *,
     model: str = DEFAULT_MODEL,
     max_tokens: int = 1500,
+    doc_metadata: Optional[Dict[str, dict]] = None,
 ) -> AnswerResult:
     settings = Settings()
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    user_message = f"# Context\n\n{build_context(retrieval)}\n\n# Question\n\n{question}"
+    user_message = (
+        f"# Context\n\n{build_context(retrieval, doc_metadata)}\n\n"
+        f"# Question\n\n{question}"
+    )
 
     resp = client.messages.create(
         model=model,

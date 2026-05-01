@@ -21,6 +21,7 @@ live as module-level state.
 
 import json
 import os
+import re
 import uuid
 from collections import OrderedDict
 from pathlib import Path
@@ -55,15 +56,42 @@ def _show_pages_enabled() -> bool:
     return os.environ.get("PLANESCAPE_SHOW_PAGES", "").strip() in {"1", "true", "yes"}
 
 
-def _load_doc_sources() -> Dict[str, Path]:
+_TSR_PREFIX_RE = re.compile(r"^TSR\s*\d+\s+")
+
+
+def _pretty_title(pdf_stem: str) -> str:
+    """Strip the 'TSR XXXX ' product-code prefix from a PDF stem."""
+    return _TSR_PREFIX_RE.sub("", pdf_stem).strip()
+
+
+def _load_doc_sources() -> Dict[str, dict]:
+    """Map doc_tag → {pdf: Path, type: 'canonical'|'adventure', title: str}.
+
+    Tolerates both schemas:
+    - Legacy: bare string value (the PDF path) — treated as canonical with title
+      inferred from the PDF stem (TSR-product-code prefix stripped).
+    - New:    object value with `pdf`, `type`, `title` keys.
+    """
     if not DOC_SOURCES_PATH.exists():
         return {}
     raw = json.loads(DOC_SOURCES_PATH.read_text())
-    out: Dict[str, Path] = {}
+    out: Dict[str, dict] = {}
     for k, v in raw.items():
-        if k.startswith("_") or not isinstance(v, str):
+        if k.startswith("_"):
             continue
-        out[k] = (_PROJECT_ROOT / v).resolve()
+        if isinstance(v, str):
+            pdf = (_PROJECT_ROOT / v).resolve()
+            out[k] = {"pdf": pdf, "type": "canonical", "title": _pretty_title(pdf.stem)}
+        elif isinstance(v, dict) and "pdf" in v:
+            pdf = (_PROJECT_ROOT / v["pdf"]).resolve()
+            out[k] = {
+                "pdf": pdf,
+                "type": v.get("type", "canonical"),
+                "title": v.get("title") or _pretty_title(pdf.stem),
+                # Optional: list of {name, start, end} describing the physical books
+                # bound inside a boxed set, for book-level citation display.
+                "books": v.get("books") or [],
+            }
     return out
 
 
@@ -84,7 +112,7 @@ app.mount("/static", StaticFiles(directory=_PACKAGE_DIR / "static"), name="stati
 templates = Jinja2Templates(directory=_PACKAGE_DIR / "templates")
 
 _retriever: Optional[Retriever] = None
-_doc_sources: Dict[str, Path] = _load_doc_sources()
+_doc_sources: Dict[str, dict] = _load_doc_sources()
 
 # Recent retrievals keyed by short UUID; the answer fragment references its
 # retrieval here so /graph/{id} can render the matching subgraph and browser
@@ -173,13 +201,16 @@ def chat(
 
     r = get_retriever()
     retrieval = r.retrieve(question, k=k, max_total=max_total, expand=expand)
-    result = answer_question(question, retrieval, model=model)
+    result = answer_question(question, retrieval, model=model, doc_metadata=_doc_sources)
 
     name_to_id = _global_name_to_id()
     api_base = str(request.base_url).rstrip("/")
     show_pages = _show_pages_enabled()
 
-    answer_html = render_body_to_html(result.answer, name_to_id, api_base, show_pages)
+    answer_html = render_body_to_html(
+        result.answer, name_to_id, api_base, show_pages,
+        doc_metadata=_doc_sources,
+    )
     retrieval_id = _store_retrieval(retrieval)
 
     return templates.TemplateResponse(
@@ -223,6 +254,7 @@ def entity_html(request: Request, entity_id: str):
         api_base,
         _show_pages_enabled(),
         strip_leading_h1=True,  # body starts with `# Title`; we already show it in the header.
+        doc_metadata=_doc_sources,
     )
 
     entity = {
@@ -281,7 +313,7 @@ def query(req: QueryRequest) -> QueryResponse:
         raise HTTPException(503, str(e))
 
     retrieval = r.retrieve(req.question, k=req.k, max_total=req.max_total, expand=req.expand)
-    result = answer_question(req.question, retrieval, model=req.model)
+    result = answer_question(req.question, retrieval, model=req.model, doc_metadata=_doc_sources)
 
     return QueryResponse(
         question=result.question,
@@ -320,9 +352,10 @@ def get_page(doc_tag: str, page: int) -> FileResponse:
         raise HTTPException(404, "Source-page rendering is disabled.")
     if page < 1:
         raise HTTPException(400, "page must be >= 1")
-    pdf_path = _doc_sources.get(doc_tag)
-    if pdf_path is None:
+    meta = _doc_sources.get(doc_tag)
+    if meta is None:
         raise HTTPException(404, f"Unknown doc_tag {doc_tag!r}")
+    pdf_path = meta["pdf"]
     if not pdf_path.exists():
         raise HTTPException(500, f"PDF for {doc_tag!r} is missing on disk: {pdf_path}")
 
