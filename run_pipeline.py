@@ -1,6 +1,6 @@
 """End-to-end orchestrator: PDF → entity graph.
 
-Runs the nine stages of the pipeline in sequence:
+Runs the ten stages of the pipeline in sequence:
   1. OCR + combine          (chunked OpenAI batches → combined.md)
   2. Registry               (pass 1: Anthropic, single call → per-doc registry)
   3. Dedup                  (canonical-name + alias dedup, in-memory)
@@ -10,6 +10,7 @@ Runs the nine stages of the pipeline in sequence:
   7. Canonicalize           (type → supertype mapping over the global registry, Haiku)
   8. Profiles submit        (pass 2: Anthropic batch, windowed mode against global)
   9. Profiles collect       (poll until done, validate, write entity .md files)
+ 10. Embed                  (OpenAI embeddings of entity bodies → FAISS-ready index for chatbot)
 
 Per-doc state lives under output-root/doc-tag/. Global state lives under
 graph-root/ (registry.json, type_supertype_mapping.json, entities/).
@@ -27,25 +28,25 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 
-from .canonicalize_types import canonicalize_types
-from .completeness_sweep import apply_suggestions_to_registry, sweep_for_missing
-from .dedup_registry import dedup_registry
-from .extract_profiles import collect_profiles, submit_profiles
-from .extract_registry import extract_registry
-from .heuristic_entity_candidates import (
+from .chatbot.embed_entities import update_index as embed_update_index
+from .pipeline.canonicalize_types import canonicalize_types
+from .pipeline.completeness_sweep import apply_suggestions_to_registry, sweep_for_missing
+from .pipeline.dedup_registry import dedup_registry
+from .pipeline.extract_profiles import collect_profiles, submit_profiles
+from .pipeline.extract_registry import extract_registry
+from .pipeline.heuristic_entity_candidates import (
     extract_candidates,
     filter_against_registry,
     filter_real_candidates,
 )
-from .merge_registries import _ensure_source_documents, merge_registries
-from .ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
-from .submit_batches import submit_chunked
-from .verify_candidates import apply_decisions, verify_candidates
-from .verify_fuzzy_merges import verify_merges as verify_merges_fn
+from .pipeline.merge_registries import _ensure_source_documents, merge_registries
+from .pipeline.ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
+from .pipeline.submit_batches import submit_chunked
+from .pipeline.verify_candidates import apply_decisions, verify_candidates
+from .pipeline.verify_fuzzy_merges import verify_merges as verify_merges_fn
 
 
 STAGES = [
@@ -58,6 +59,7 @@ STAGES = [
     "canonicalize",
     "profiles_submit",
     "profiles_collect",
+    "embed",
 ]
 
 
@@ -75,6 +77,35 @@ def _load_registry(path: Path) -> dict:
 def _save_registry(path: Path, registry: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(registry, indent=2, ensure_ascii=False))
+
+
+def _register_doc_source(doc_tag: str, pdf_path: Path, project_root: Path) -> None:
+    """Add or refresh the doc_tag → PDF mapping in chatbot/doc_sources.json so
+    the page-image preview endpoint can render source pages for citations from
+    this doc once PLANESCAPE_SHOW_PAGES=1 is set on the API."""
+    sources_path = project_root / "chatbot" / "doc_sources.json"
+    if sources_path.exists():
+        data = json.loads(sources_path.read_text())
+    else:
+        data = {
+            "_comment": (
+                "Maps doc_tag (used in `## Source: <doc_tag>` headers) to the "
+                "source PDF. Paths are resolved relative to the planescapeRAG/ "
+                "package directory. Used by /page/{doc_tag}/{page} when "
+                "PLANESCAPE_SHOW_PAGES=1."
+            ),
+        }
+
+    try:
+        rel = pdf_path.resolve().relative_to(project_root.resolve())
+        path_str = str(rel)
+    except ValueError:
+        path_str = str(pdf_path.resolve())
+
+    if data.get(doc_tag) != path_str:
+        data[doc_tag] = path_str
+        sources_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        print(f"  registered {doc_tag} → {path_str} in doc_sources.json", flush=True)
 
 
 def run_pipeline(
@@ -257,6 +288,31 @@ def run_pipeline(
                 corpus_profile=profile,
             )
             print(f"  done ({time.time() - t0:.0f}s)", flush=True)
+
+    # 10. Embed entities for chatbot retrieval (incremental: only new/changed)
+    #     Also register the doc_tag → PDF mapping for the chatbot's page-preview endpoint.
+    if start_idx <= 9:
+        _stage_header(10, total, "embed entities for chatbot")
+        t0 = time.time()
+        project_root = graph_root.parent
+        chatbot_index_dir = project_root / "chatbot" / "index"
+
+        _register_doc_source(doc_tag, pdf_path, project_root)
+
+        if not entities_dir.exists():
+            print(f"  skipped: no entities at {entities_dir} yet", flush=True)
+        else:
+            try:
+                embed_update_index(
+                    entities_dir=entities_dir,
+                    vectors_path=chatbot_index_dir / "vectors.npy",
+                    metadata_path=chatbot_index_dir / "metadata.json",
+                    auto_yes=auto_yes,
+                )
+                print(f"  done ({time.time() - t0:.0f}s)", flush=True)
+            except RuntimeError as e:
+                # OPENAI_API_KEY missing, etc. — chatbot is optional, don't break the run.
+                print(f"  skipped: {e}", flush=True)
 
     print(f"\n=== Pipeline complete ({time.time() - overall_start:.0f}s total) ===", flush=True)
 

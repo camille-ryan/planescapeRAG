@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 import anthropic
 from dotenv import load_dotenv
 
-from .config import Settings
+from ..config import Settings
 from .ocr import load_corpus_profile
 
 
@@ -147,7 +147,7 @@ def canonicalize_types(
         print(f"  {st:>10}: {', '.join(by_supertype[st])}")
 
     print(f"\nUsage: input={response.usage.input_tokens}  output={response.usage.output_tokens}")
-    from .cost import report_call
+    from ..cost import report_call
     report_call("canonicalize_types", chosen_model, response.usage)
     return mapping
 

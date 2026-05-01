@@ -19,12 +19,12 @@ and Haiku is well-suited.
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import anthropic
 from dotenv import load_dotenv
 
-from .config import Settings
+from ..config import Settings
 
 
 _VERIFY_MERGES_TOOL = {
@@ -143,7 +143,7 @@ def verify_merges(
     if tool_use is None:
         raise RuntimeError(f"Model did not call verify_merges. Stop: {response.stop_reason}")
 
-    from .cost import report_call
+    from ..cost import report_call
     report_call("verify_fuzzy_merges", model, response.usage)
 
     raw_decisions = tool_use.input.get("decisions", [])

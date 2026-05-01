@@ -24,7 +24,7 @@ from typing import Dict, List, Optional
 import anthropic
 from dotenv import load_dotenv
 
-from .config import Settings
+from ..config import Settings
 from .ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
 
 
@@ -210,12 +210,12 @@ def sweep_for_missing(
     print(f"\nSuggested: {len(suggestions)} | Valid (evidence verified): {len(valid)} | Rejected (no evidence): {len(rejected_no_evidence)}")
     print(f"Wrote suggestions → {output_path}")
     if valid:
-        print(f"\nSample valid suggestions (first 12):")
+        print("\nSample valid suggestions (first 12):")
         for s in valid[:12]:
             notable = "*" if s.get("notable") else " "
             print(f"  {notable} [{s['type']:>10}] {s['canonical_name']}: {s['brief_description']}")
     print(f"\nUsage: input={response.usage.input_tokens} output={response.usage.output_tokens} stop={response.stop_reason}")
-    from .cost import report_call
+    from ..cost import report_call
     report_call("completeness_sweep", chosen_model, response.usage)
 
     return valid

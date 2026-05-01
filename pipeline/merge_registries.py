@@ -21,7 +21,7 @@ If global_registry.json doesn't exist, a fresh one is created.
 import argparse
 import json
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import regex
 
@@ -194,21 +194,23 @@ if __name__ == "__main__":
     verify_fn = None
     if args.verify_merges:
         from .verify_fuzzy_merges import verify_merges as _verify_impl
-        verify_fn = lambda pairs: _verify_impl(pairs, model=args.verify_model)
+
+        def verify_fn(pairs):
+            return _verify_impl(pairs, model=args.verify_model)
 
     merged, stats = merge_registries(global_reg, new_reg, verify_fn=verify_fn)
 
     out_path = args.output or args.global_registry
     out_path.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
 
-    print(f"\nMerge stats:")
+    print("\nMerge stats:")
     print(f"  exact-name matches:      {stats['merged_exact']}")
     print(f"  fuzzy-name matches:      {stats['merged_fuzzy']}")
     print(f"  fuzzy rejected (split):  {stats['rejected_fuzzy']}")
     print(f"  added as new:            {stats['added_new']}")
     print(f"  total entities now:      {len(merged['entities'])}")
     if stats["fuzzy_decisions"]:
-        print(f"\nFuzzy-pair decisions:")
+        print("\nFuzzy-pair decisions:")
         for new_name, existing_name, action in stats["fuzzy_decisions"][:30]:
             verb = "merged into" if action == "merged" else "kept SEPARATE from"
             print(f"  {new_name!r:<40} {verb} {existing_name!r}")

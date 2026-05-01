@@ -6,15 +6,17 @@ from typing import Dict, List, Optional
 
 try:
     import boto3
+    from botocore.client import Config as BotoConfig
 except ImportError:
     boto3 = None
+    BotoConfig = None
 
 try:
     from openai import OpenAI
 except ImportError:
     OpenAI = None
 
-from .config import Settings
+from ..config import Settings
 
 
 _OCR_BASE_PROMPT = (
@@ -115,10 +117,15 @@ class OpenAIOCR:
             raise ValueError("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set in .env for S3 upload.")
 
         from pdf2image import convert_from_path
+        # Explicit region + SigV4 signing. Without these, boto3 falls back to
+        # SigV2 query-string presigned URLs, which S3 rejects with 403 on
+        # buckets that enforce v4-only signing (most us-west-2 buckets).
         s3_client = boto3.client(
             's3',
             aws_access_key_id=self.settings.aws_access_key_id,
             aws_secret_access_key=self.settings.aws_secret_access_key,
+            region_name=self.settings.aws_region,
+            config=BotoConfig(signature_version='s3v4'),
         )
 
         prompt = build_ocr_prompt(profile)

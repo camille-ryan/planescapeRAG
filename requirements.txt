@@ -4,3 +4,12 @@ python-dotenv
 pdf2image
 boto3
 regex
+numpy
+faiss-cpu
+fastapi
+uvicorn
+pyvis
+Pillow
+jinja2
+markdown
+python-multipart

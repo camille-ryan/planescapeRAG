@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Tuple
 import anthropic
 from dotenv import load_dotenv
 
-from .config import Settings
+from ..config import Settings
 from .ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
 
 
@@ -214,7 +214,7 @@ def verify_candidates(
         raise RuntimeError(f"Model returned non-list decisions: {type(decisions).__name__}")
 
     print(f"Got {len(decisions)} decisions. Usage: input={response.usage.input_tokens} output={response.usage.output_tokens}")
-    from .cost import report_call
+    from ..cost import report_call
     report_call("verify_candidates", chosen_model, response.usage)
 
     return decisions
@@ -316,7 +316,7 @@ if __name__ == "__main__":
     # Summary
     from collections import Counter
     actions = Counter(d.get("action") for d in decisions if isinstance(d, dict))
-    print(f"\nDecision counts:")
+    print("\nDecision counts:")
     for action, n in actions.most_common():
         print(f"  {n:>4}  {action}")
 

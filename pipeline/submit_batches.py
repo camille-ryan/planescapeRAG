@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from .combine_batch import combine_batch_results
-from .config import Settings
+from ..config import Settings
 from .ocr import OpenAIOCR, load_corpus_profile
 
 POLL_INTERVAL_SECONDS = 60

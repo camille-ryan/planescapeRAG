@@ -4,6 +4,7 @@
 # Derived data and source PDFs (large, regenerable)
 tmp/
 graph/
+chatbot/index/
 
 # Python bytecode
 __pycache__/

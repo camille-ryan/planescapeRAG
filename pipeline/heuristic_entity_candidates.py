@@ -23,9 +23,8 @@ flout English capitalization conventions.
 import argparse
 import json
 import re
-from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List
 
 
 _CONNECTIVES = {

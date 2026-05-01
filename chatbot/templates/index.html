@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Planescape graphRAG</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body>
+  <header>
+    <div class="title-row">
+      <h1>Planescape graphRAG</h1>
+      <p class="subtitle">Question → top-k entity retrieval → 1-hop graph expansion → cited answer</p>
+    </div>
+
+    <form id="question-form"
+          hx-post="/chat"
+          hx-target="#answer-panel"
+          hx-swap="innerHTML"
+          hx-indicator="#spinner">
+      <div class="form-row">
+        <textarea name="question" placeholder="Ask about Sigil, the Lady of Pain, the factions..." rows="2" required></textarea>
+        <button type="submit">Ask</button>
+      </div>
+      <details class="settings">
+        <summary>Settings</summary>
+        <div class="settings-grid">
+          <label>Top-k <input type="number" name="k" value="5" min="1" max="20"></label>
+          <label>Max total <input type="number" name="max_total" value="15" min="1" max="30"></label>
+          <label class="checkbox"><input type="checkbox" name="expand" value="true" checked> 1-hop expansion</label>
+          <label>Model
+            <select name="model">
+              <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+              <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+              <option value="claude-opus-4-7">Opus 4.7</option>
+            </select>
+          </label>
+        </div>
+      </details>
+      <span id="spinner" class="htmx-indicator">⏳ Thinking…</span>
+    </form>
+  </header>
+
+  <main>
+    <section id="answer-panel" class="panel answer-panel">
+      <p class="placeholder">Ask a question above to begin.</p>
+    </section>
+    <section id="entity-panel" class="panel entity-panel">
+      <p class="placeholder">Click any wikilink in the answer to explore an entity. From there, follow links to navigate the graph freely.</p>
+    </section>
+  </main>
+
+  <footer>
+    <small>
+      API: <a href="/docs" target="_blank">/docs</a>
+      · status: <span id="status">checking…</span>
+    </small>
+  </footer>
+
+  <script>
+    const form = document.getElementById('question-form');
+    const submitBtn = form.querySelector('button[type="submit"]');
+    const askText = submitBtn.textContent;
+
+    // Disable the submit button + change its label while the request is in flight.
+    // htmx:beforeRequest / htmx:afterRequest fire on the element that initiated
+    // the request (the form here), and afterRequest fires for both success and
+    // failure — so the button always re-enables.
+    form.addEventListener('htmx:beforeRequest', function() {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Thinking…';
+    });
+    form.addEventListener('htmx:afterRequest', function() {
+      submitBtn.disabled = false;
+      submitBtn.textContent = askText;
+    });
+
+    // After any HTMX swap completes, reset the affected pane's own scroll to
+    // the top so the user starts at the question / entity title rather than
+    // wherever the previous content's scroll position was.
+    document.body.addEventListener('htmx:afterSettle', function(evt) {
+      const target = evt.detail.target;
+      if (target && (target.id === 'answer-panel' || target.id === 'entity-panel')) {
+        target.scrollTop = 0;
+      }
+    });
+
+    // Enter submits; Shift+Enter inserts a newline. Skip if a request is in
+    // flight so users can't double-submit by hammering Enter.
+    document.querySelector('textarea[name="question"]').addEventListener('keydown', function(evt) {
+      if (evt.key === 'Enter' && !evt.shiftKey) {
+        evt.preventDefault();
+        if (!submitBtn.disabled) {
+          form.requestSubmit();
+        }
+      }
+    });
+
+    // Liveness display
+    fetch('/health').then(r => r.json()).then(d => {
+      document.getElementById('status').textContent =
+        d.status === 'ok' ? `${d.indexed_entities} entities indexed` : d.status;
+    }).catch(() => {
+      document.getElementById('status').textContent = 'unreachable';
+    });
+  </script>
+</body>
+</html>

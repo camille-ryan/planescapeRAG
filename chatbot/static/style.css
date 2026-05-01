@@ -1,0 +1,315 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Planescape graphRAG — dark theme inspired by Streamlit's default palette.
+   ────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --bg:           #0e1117;   /* page background */
+  --bg-panel:     #1a1d24;   /* panels, header */
+  --bg-elev:      #262730;   /* inputs, code, badges */
+  --bg-hover:     #2e3038;
+  --border:       #30343c;
+  --border-soft:  #232730;
+  --text:         #fafafa;
+  --text-mute:    #a3a8b8;
+  --text-dim:     #6b7280;
+  --accent:       #4d9eff;
+  --accent-hover: #6cb1ff;
+  --accent-soft:  #1a3358;
+  --link:         #4d9eff;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  /* Flex column so the header/footer stay put and the two-pane main fills
+     the rest of the viewport — each pane scrolls independently. */
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code {
+  background: var(--bg-elev);
+  color: var(--text);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.9em;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+
+::selection { background: var(--accent-soft); }
+
+/* ── Header / form ─────────────────────────────────────────────────────── */
+
+header {
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  padding: 1.25rem 2rem 1rem;
+  flex: 0 0 auto;          /* fixed height — never shrinks or grows */
+  z-index: 10;
+}
+
+.title-row { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+.title-row h1 { margin: 0; font-size: 1.4rem; font-weight: 600; color: var(--text); }
+.subtitle { margin: 0; color: var(--text-mute); font-size: 0.9rem; }
+
+#question-form { margin-top: 0.75rem; }
+
+.form-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+textarea[name="question"] {
+  flex: 1;
+  font: inherit;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  resize: vertical;
+  min-height: 2.5rem;
+}
+textarea[name="question"]::placeholder { color: var(--text-dim); }
+textarea[name="question"]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+button[type="submit"] {
+  padding: 0.5rem 1.25rem;
+  background: var(--accent);
+  color: #0e1117;
+  border: none;
+  border-radius: 4px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button[type="submit"]:hover { background: var(--accent-hover); }
+button[type="submit"]:active { background: var(--accent); transform: translateY(1px); }
+button[type="submit"]:disabled {
+  background: var(--bg-elev);
+  color: var(--text-mute);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+button[type="submit"]:disabled:hover { background: var(--bg-elev); }
+
+.settings { margin-top: 0.5rem; font-size: 0.9rem; color: var(--text-mute); }
+.settings summary { cursor: pointer; color: var(--text-mute); user-select: none; }
+.settings summary:hover { color: var(--text); }
+.settings-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem 0;
+  align-items: center;
+}
+.settings-grid label { display: flex; align-items: center; gap: 0.4rem; }
+.settings-grid input[type="number"],
+.settings-grid select {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.2rem 0.4rem;
+  font: inherit;
+}
+.settings-grid input[type="number"] { width: 4rem; }
+.settings-grid input[type="checkbox"] { accent-color: var(--accent); }
+
+.htmx-indicator {
+  display: none;
+  margin-left: 1rem;
+  color: var(--text-mute);
+  font-size: 0.9rem;
+}
+.htmx-request #spinner { display: inline; }
+
+/* ── Main two-pane layout ──────────────────────────────────────────────── */
+
+main {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 1rem;
+  padding: 1rem 2rem;
+  max-width: 1600px;
+  margin: 0 auto;
+  width: 100%;
+  flex: 1 1 auto;          /* fill the rest of the viewport */
+  min-height: 0;           /* allow children with overflow to bound correctly */
+  overflow: hidden;        /* the panes scroll, not the page */
+}
+
+@media (max-width: 1024px) {
+  main { grid-template-columns: 1fr; }
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.25rem 1.5rem;
+  overflow-y: auto;        /* each pane scrolls independently */
+  min-height: 0;
+}
+
+.placeholder {
+  color: var(--text-dim);
+  font-style: italic;
+  text-align: center;
+  margin-top: 4rem;
+}
+
+/* ── Answer pane ───────────────────────────────────────────────────────── */
+
+.answer { animation: fadeIn 0.2s ease-out; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.question-echo {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text);
+}
+
+.answer-text { font-size: 1rem; color: var(--text); }
+.answer-text p { margin: 0.6rem 0; }
+.answer-text h2, .answer-text h3 { margin-top: 1rem; color: var(--text); }
+.answer-text ul, .answer-text ol { padding-left: 1.5rem; }
+.answer-text li { margin: 0.3rem 0; }
+.answer-text strong { color: var(--text); }
+.answer-text em { color: var(--text); }
+
+.meta { color: var(--text-mute); font-size: 0.85rem; margin: 1rem 0; }
+
+.references { margin: 1rem 0; }
+.references summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-mute);
+  user-select: none;
+  padding: 0.25rem 0;
+}
+.references summary:hover { color: var(--text); }
+.ref-list { list-style: none; padding-left: 0.5rem; margin: 0.5rem 0 0; }
+.ref-list li { padding: 0.2rem 0; }
+.ref-meta { color: var(--text-dim); font-size: 0.85rem; }
+
+.graph { margin: 1rem 0; }
+.graph summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-mute);
+  user-select: none;
+  padding: 0.25rem 0;
+}
+.graph summary:hover { color: var(--text); }
+.graph iframe {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-top: 0.5rem;
+  background: #ffffff;       /* pyvis network is rendered light; keep its bg white */
+}
+
+/* ── Entity pane ───────────────────────────────────────────────────────── */
+
+.entity { animation: fadeIn 0.2s ease-out; }
+
+.entity-header {
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 0.75rem;
+  margin-bottom: 1rem;
+}
+.entity-header h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.3rem;
+  color: var(--text);
+}
+.type-badge {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  padding: 1px 8px;
+  border-radius: 3px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.aliases { color: var(--text-mute); font-size: 0.85rem; font-style: italic; margin: 0.25rem 0 0; }
+
+.entity-body { color: var(--text); }
+.entity-body h2 {
+  font-size: 1.05rem;
+  margin-top: 1.25rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-soft);
+  color: var(--text);
+}
+.entity-body h3 {
+  font-size: 0.95rem;
+  color: var(--text-mute);
+  margin-top: 0.75rem;
+}
+.entity-body ul { padding-left: 1.5rem; }
+.entity-body li { margin: 0.3rem 0; }
+
+/* ── Wikilinks and citations ───────────────────────────────────────────── */
+
+.wikilink {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  padding: 0 4px;
+  border-radius: 3px;
+  border-bottom: 1px dotted var(--accent);
+}
+.wikilink:hover {
+  background: #244270;
+  color: #ffffff;
+  text-decoration: none;
+}
+.wikilink-expansion {
+  background: var(--bg-elev);
+  border-bottom-color: var(--text-dim);
+  color: var(--text-mute);
+}
+.wikilink-expansion:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.citation {
+  color: var(--text-mute);
+  font-size: 0.9em;
+  border-bottom: 1px dotted var(--text-dim);
+}
+.citation:hover { color: var(--accent-hover); text-decoration: none; }
+
+/* ── Footer ────────────────────────────────────────────────────────────── */
+
+footer {
+  text-align: center;
+  padding: 0.5rem 2rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  flex: 0 0 auto;          /* always visible at the bottom */
+  border-top: 1px solid var(--border-soft);
+}
+footer a { color: var(--text-dim); text-decoration: underline; }
+footer a:hover { color: var(--text-mute); }

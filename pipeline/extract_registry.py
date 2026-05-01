@@ -6,8 +6,8 @@ from typing import Dict, Optional
 import anthropic
 from dotenv import load_dotenv
 
-from .config import Settings
-from .cost import report_call
+from ..config import Settings
+from ..cost import report_call
 from .ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
 
 

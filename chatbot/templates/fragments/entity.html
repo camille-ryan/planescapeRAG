@@ -1,0 +1,19 @@
+<article class="entity">
+  <header class="entity-header">
+    <h2>{{ entity.canonical_name }}</h2>
+    <p class="meta">
+      <span class="type-badge">{{ entity.type }}</span>
+      {% if entity.supertype and entity.supertype != entity.type %}
+        · <span>{{ entity.supertype }}</span>
+      {% endif %}
+      · <code>{{ entity.entity_id }}</code>
+    </p>
+    {% if entity.aliases %}
+      <p class="aliases">aka: {{ entity.aliases }}</p>
+    {% endif %}
+  </header>
+
+  <div class="entity-body">
+    {{ body_html | safe }}
+  </div>
+</article>

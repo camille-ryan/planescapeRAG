@@ -20,8 +20,8 @@ import anthropic
 import regex as fuzzy_regex
 from dotenv import load_dotenv
 
-from .config import Settings
-from .cost import (
+from ..config import Settings
+from ..cost import (
     compute_anthropic_cost,
     confirm_proceed,
     estimate_anthropic_batch_cost,

@@ -20,7 +20,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, List, Optional
 
 
 # USD per million tokens. cache_write rates vary by TTL.
@@ -284,5 +284,5 @@ def confirm_proceed(
 
     if auto_yes or cost < threshold_usd:
         return True
-    answer = input(f"\n  Proceed? [y/N]: ").strip().lower()
+    answer = input("\n  Proceed? [y/N]: ").strip().lower()
     return answer in ("y", "yes")

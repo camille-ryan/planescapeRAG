@@ -1,0 +1,6 @@
+{
+  "_comment": "Maps doc_tag (used in `## Source: <doc_tag>` headers) to the source PDF. Paths are resolved relative to the planescapeRAG/ package directory. Used by /page/{doc_tag}/{page} when PLANESCAPE_SHOW_PAGES=1.",
+  "campaign_setting": "documents/Boxed Sets/TSR 2600 Planescape Campaign Setting.pdf",
+  "planes_of_chaos": "documents/Boxed Sets/TSR 2603 Planes of Chaos.pdf",
+  "planes_of_law": "documents/Boxed Sets/TSR 2607 Planes of Law.pdf"
+}

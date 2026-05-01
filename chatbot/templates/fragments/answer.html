@@ -1,0 +1,38 @@
+<article class="answer">
+  <h2 class="question-echo">{{ question }}</h2>
+
+  <div class="answer-text">
+    {{ answer_html | safe }}
+  </div>
+
+  <p class="meta">
+    {% if cost_usd is not none %}Cost: ${{ "%.4f" | format(cost_usd) }} · {% endif %}
+    Model: <code>{{ model }}</code>
+  </p>
+
+  <details class="references">
+    <summary>References ({{ entities | length }})</summary>
+    <ul class="ref-list">
+      {% for e in entities %}
+        <li>
+          <a href="/entity/{{ e.entity_id }}"
+             hx-get="/entity/{{ e.entity_id }}"
+             hx-target="#entity-panel"
+             hx-swap="innerHTML"
+             hx-push-url="true"
+             class="wikilink {% if not e.is_primary %}wikilink-expansion{% endif %}">{{ e.canonical_name }}</a>
+          <span class="ref-meta">— {{ e.type }} · {{ e.badge }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </details>
+
+  {% if show_graph %}
+  <details class="graph" open>
+    <summary>Retrieval graph</summary>
+    <iframe src="/graph/{{ retrieval_id }}"
+            width="100%" height="540" frameborder="0"
+            title="Retrieved subgraph"></iframe>
+  </details>
+  {% endif %}
+</article>
