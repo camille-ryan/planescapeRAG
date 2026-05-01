@@ -152,10 +152,17 @@ def run_pipeline(
     heuristic_min_count: int = 3,
     source_type: str = "canonical",
     source_title: Optional[str] = None,
+    stop_after: Optional[str] = None,
 ) -> None:
     if start_from not in STAGES:
         raise ValueError(f"Unknown stage: {start_from!r}. Valid: {STAGES}")
     start_idx = STAGES.index(start_from)
+    if stop_after is not None:
+        if stop_after not in STAGES:
+            raise ValueError(f"Unknown stop-after stage: {stop_after!r}. Valid: {STAGES}")
+        stop_idx = STAGES.index(stop_after)
+    else:
+        stop_idx = len(STAGES) - 1
 
     # Per-doc paths
     work_dir = output_root / doc_tag
@@ -179,7 +186,7 @@ def run_pipeline(
     total = len(STAGES)
 
     # 1. OCR + combine
-    if start_idx <= 0:
+    if start_idx <= 0 <= stop_idx:
         _stage_header(1, total, "OCR + combine")
         t0 = time.time()
         submit_chunked(pdf_path=pdf_path, output_dir=work_dir, profile=profile, chunk_size=chunk_size)
@@ -188,14 +195,14 @@ def run_pipeline(
         print(f"  done ({time.time() - t0:.0f}s)", flush=True)
 
     # 2. Pass 1: entity registry
-    if start_idx <= 1:
+    if start_idx <= 1 <= stop_idx:
         _stage_header(2, total, "pass 1 — entity registry")
         t0 = time.time()
         extract_registry(document_path=combined_md, output_path=per_doc_registry, profile=profile)
         print(f"  done ({time.time() - t0:.0f}s)", flush=True)
 
     # 3. Dedup the per-doc registry in place
-    if start_idx <= 2:
+    if start_idx <= 2 <= stop_idx:
         _stage_header(3, total, "dedup registry")
         t0 = time.time()
         registry = _load_registry(per_doc_registry)
@@ -204,7 +211,7 @@ def run_pipeline(
         print(f"  merged {stats['entities_merged']} entities, removed {stats['aliases_removed']} duplicate aliases ({time.time() - t0:.0f}s)", flush=True)
 
     # 4. Merge per-doc registry into global registry (with LLM verifier on fuzzy pairs)
-    if start_idx <= 3:
+    if start_idx <= 3 <= stop_idx:
         _stage_header(4, total, "merge into global registry")
         t0 = time.time()
         global_reg = _load_registry(global_registry)
@@ -215,7 +222,7 @@ def run_pipeline(
         print(f"  exact={stats['merged_exact']}  fuzzy_merged={stats['merged_fuzzy']}  fuzzy_split={stats['rejected_fuzzy']}  added_new={stats['added_new']}  total_now={len(merged['entities'])} ({time.time() - t0:.0f}s)", flush=True)
 
     # 5. LLM completeness sweep against the global registry
-    if start_idx <= 4:
+    if start_idx <= 4 <= stop_idx:
         _stage_header(5, total, "LLM completeness sweep")
         t0 = time.time()
         valid = sweep_for_missing(
@@ -230,7 +237,7 @@ def run_pipeline(
         print(f"  added {added} entities from sweep (total now: {len(registry['entities'])}) ({time.time() - t0:.0f}s)", flush=True)
 
     # 6. Heuristic candidates → LLM verifier → apply to global
-    if start_idx <= 5:
+    if start_idx <= 5 <= stop_idx:
         _stage_header(6, total, "heuristic candidate sweep")
         t0 = time.time()
         document = combined_md.read_text()
@@ -264,7 +271,7 @@ def run_pipeline(
         print(f"  done ({time.time() - t0:.0f}s)", flush=True)
 
     # 7. Canonicalize types over the global registry
-    if start_idx <= 6:
+    if start_idx <= 6 <= stop_idx:
         _stage_header(7, total, "canonicalize types (global)")
         t0 = time.time()
         canonicalize_types(
@@ -276,7 +283,7 @@ def run_pipeline(
         print(f"  done ({time.time() - t0:.0f}s)", flush=True)
 
     # 8. Pass 2 submit (against the global registry)
-    if start_idx <= 7:
+    if start_idx <= 7 <= stop_idx:
         _stage_header(8, total, "pass 2 submit")
         t0 = time.time()
         batch_id = submit_profiles(
@@ -298,7 +305,7 @@ def run_pipeline(
             print(f"  no entities to submit (all skipped) ({time.time() - t0:.0f}s)", flush=True)
 
     # 9. Pass 2 collect
-    if start_idx <= 8:
+    if start_idx <= 8 <= stop_idx:
         _stage_header(9, total, "pass 2 collect")
         t0 = time.time()
         if not pass2_batch_file.exists():
@@ -320,7 +327,7 @@ def run_pipeline(
 
     # 10. Embed entities for chatbot retrieval (incremental: only new/changed)
     #     Also register the doc_tag → PDF mapping for the chatbot's page-preview endpoint.
-    if start_idx <= 9:
+    if start_idx <= 9 <= stop_idx:
         _stage_header(10, total, "embed entities for chatbot")
         t0 = time.time()
         project_root = graph_root.parent
@@ -376,6 +383,12 @@ if __name__ == "__main__":
         help="Pretty title for citations (e.g. 'The Great Modron March'). "
              "Defaults to PDF stem with the leading 'TSR XXXX ' prefix stripped.",
     )
+    parser.add_argument(
+        "--stop-after", type=str, default=None, choices=STAGES,
+        help="Stop after this stage completes (its outputs are persisted). "
+             "Use with --start-from to run a slice of the pipeline. The two-pass "
+             "batch script uses --stop-after canonicalize for phase 1.",
+    )
     args = parser.parse_args()
 
     run_pipeline(
@@ -395,4 +408,5 @@ if __name__ == "__main__":
         heuristic_min_count=args.heuristic_min_count,
         source_type=args.source_type,
         source_title=args.source_title,
+        stop_after=args.stop_after,
     )
