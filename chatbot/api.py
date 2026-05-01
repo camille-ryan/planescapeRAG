@@ -140,10 +140,21 @@ def _store_retrieval(retrieval: RetrievalResult) -> str:
 
 
 def _global_name_to_id() -> Dict[str, str]:
-    """Lowercase canonical_name → entity_id, over the entire corpus.
-    Used to linkify wikilinks to ANY entity, not just the retrieved set."""
+    """Lowercase surface-form → entity_id, over the entire corpus.
+    Includes both canonical names AND aliases, so `[[the Cage]]` resolves to
+    Sigil. Canonicals are added first; aliases never overwrite a canonical."""
     r = get_retriever()
-    return {e["canonical_name"].lower(): e["entity_id"] for e in r.entities if e.get("canonical_name")}
+    out: Dict[str, str] = {}
+    for e in r.entities:
+        cn = (e.get("canonical_name") or "").strip().lower()
+        if cn:
+            out[cn] = e["entity_id"]
+    for e in r.entities:
+        for a in e.get("aliases") or []:
+            key = a.strip().lower()
+            if key and key not in out:
+                out[key] = e["entity_id"]
+    return out
 
 
 # ─── JSON request/response models ──────────────────────────────────────────
@@ -257,12 +268,15 @@ def entity_html(request: Request, entity_id: str):
         doc_metadata=_doc_sources,
     )
 
+    aliases = fm.get("aliases") or []
+    if not isinstance(aliases, list):
+        aliases = []
     entity = {
         "entity_id": entity_id,
         "canonical_name": indexed.get("canonical_name") or fm.get("canonical_name") or entity_id,
         "type": indexed.get("type") or fm.get("type", ""),
         "supertype": fm.get("supertype", ""),
-        "aliases": fm.get("aliases", "").strip("[]") if fm.get("aliases") else "",
+        "aliases": ", ".join(aliases),
     }
 
     return templates.TemplateResponse(

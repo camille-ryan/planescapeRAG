@@ -33,9 +33,11 @@ EMBEDDING_DIM = 1536
 OPENAI_EMBEDDING_RATE = 0.020 / 1_000_000
 
 
-def _parse_entity_file(path: Path) -> Tuple[Dict[str, str], str]:
-    """Return (frontmatter_kv, body_text). Frontmatter is parsed naively — we only
-    need a few simple scalar fields (canonical_name, type), not full YAML."""
+def _parse_entity_file(path: Path) -> Tuple[Dict[str, object], str]:
+    """Return (frontmatter_kv, body_text). Frontmatter is parsed naively but
+    handles three value forms: JSON-list (`["a", "b"]`), quoted string
+    (`"foo"`), and bare scalar (`42`, `true`, `bar`). Lists come back as Python
+    lists — this matters for `aliases` and `source_documents`."""
     text = path.read_text()
     if not text.startswith("---\n"):
         return {}, text
@@ -45,14 +47,22 @@ def _parse_entity_file(path: Path) -> Tuple[Dict[str, str], str]:
     frontmatter_block = text[4:end]
     body = text[end + 5:].lstrip()
 
-    fm: Dict[str, str] = {}
+    fm: Dict[str, object] = {}
     for line in frontmatter_block.split("\n"):
         m = re.match(r"^([a-zA-Z_]+):\s*(.*)$", line)
-        if m:
-            value = m.group(2).strip()
-            if value.startswith('"') and value.endswith('"'):
-                value = value[1:-1]
-            fm[m.group(1)] = value
+        if not m:
+            continue
+        key = m.group(1)
+        value = m.group(2).strip()
+        if value.startswith("[") and value.endswith("]"):
+            try:
+                fm[key] = json.loads(value)
+                continue
+            except json.JSONDecodeError:
+                pass  # fall through to string handling
+        if value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        fm[key] = value
     return fm, body
 
 
@@ -122,6 +132,7 @@ def update_index(
     batch_size: int = 100,
     auto_yes: bool = False,
     cost_threshold_usd: float = 0.50,
+    force_refresh: bool = False,
 ) -> Dict[str, int]:
     """Embed new/changed entities, persist vectors + metadata. Returns stats."""
     settings = Settings()
@@ -148,9 +159,19 @@ def update_index(
     print(f"  new or changed: {len(to_embed)}", flush=True)
     print(f"  removed: {len(removed)}", flush=True)
 
-    if not to_embed and not removed and old_vectors is not None:
+    # If metadata is missing fields we now record (e.g. aliases added in a later
+    # release), force a metadata refresh even when no bodies changed. The
+    # rebuild reuses existing vectors — it just rewrites the JSON sidecar.
+    metadata_stale = old_vectors is not None and any(
+        "aliases" not in e for e in old_entities
+    )
+
+    if not to_embed and not removed and old_vectors is not None and not metadata_stale and not force_refresh:
         print("  no changes; index up to date.", flush=True)
         return {"on_disk": len(on_disk), "embedded": 0, "removed": 0, "cost_usd": 0.0}
+
+    if not to_embed and (metadata_stale or force_refresh):
+        print("  refreshing metadata (no embedding changes; aliases / new fields)", flush=True)
 
     if to_embed:
         total_chars = sum(len(b) for _, b in to_embed)
@@ -179,24 +200,26 @@ def update_index(
     final_entities: List[dict] = []
     final_vectors: List[np.ndarray] = []
 
-    for entity_id, old_row in keep_old:
-        path, fm, _, h = on_disk[entity_id]
-        final_entities.append({
+    def _meta_entry(entity_id: str, fm: dict, h: str) -> dict:
+        aliases = fm.get("aliases") or []
+        if not isinstance(aliases, list):
+            aliases = []
+        return {
             "entity_id": entity_id,
             "content_hash": h,
             "canonical_name": fm.get("canonical_name", ""),
             "type": fm.get("type", ""),
-        })
+            "aliases": [a for a in aliases if isinstance(a, str) and a.strip()],
+        }
+
+    for entity_id, old_row in keep_old:
+        path, fm, _, h = on_disk[entity_id]
+        final_entities.append(_meta_entry(entity_id, fm, h))
         final_vectors.append(old_vectors[old_row])
 
     for entity_id, _ in to_embed:
         path, fm, _, h = on_disk[entity_id]
-        final_entities.append({
-            "entity_id": entity_id,
-            "content_hash": h,
-            "canonical_name": fm.get("canonical_name", ""),
-            "type": fm.get("type", ""),
-        })
+        final_entities.append(_meta_entry(entity_id, fm, h))
         final_vectors.append(new_rows[entity_id])
 
     matrix = np.vstack(final_vectors).astype(np.float32) if final_vectors else np.zeros((0, EMBEDDING_DIM), dtype=np.float32)
@@ -229,6 +252,11 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=100)
     parser.add_argument("--cost-threshold", type=float, default=0.50)
     parser.add_argument("--yes", action="store_true")
+    parser.add_argument(
+        "--force-refresh", action="store_true",
+        help="Rebuild metadata.json even when bodies haven't changed. Use after "
+             "changing frontmatter (e.g. running tools/refresh_entity_frontmatter).",
+    )
     args = parser.parse_args()
 
     args.index_dir.mkdir(parents=True, exist_ok=True)
@@ -239,6 +267,7 @@ def main() -> None:
         batch_size=args.batch_size,
         auto_yes=args.yes,
         cost_threshold_usd=args.cost_threshold,
+        force_refresh=args.force_refresh,
     )
 
 
