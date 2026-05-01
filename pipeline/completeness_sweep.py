@@ -135,6 +135,7 @@ def sweep_for_missing(
     output_path: Path,
     profile: Optional[Dict[str, str]] = None,
     model: Optional[str] = None,
+    doc_tag: Optional[str] = None,
 ) -> List[dict]:
     settings = Settings()
     if not settings.anthropic_api_key:
@@ -216,7 +217,10 @@ def sweep_for_missing(
             print(f"  {notable} [{s['type']:>10}] {s['canonical_name']}: {s['brief_description']}")
     print(f"\nUsage: input={response.usage.input_tokens} output={response.usage.output_tokens} stop={response.stop_reason}")
     from ..cost import report_call
-    report_call("completeness_sweep", chosen_model, response.usage)
+    report_call(
+        "completeness_sweep", chosen_model, response.usage,
+        details={"doc_tag": doc_tag} if doc_tag else None,
+    )
 
     return valid
 

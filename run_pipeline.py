@@ -230,6 +230,7 @@ def run_pipeline(
             registry_path=global_registry,
             output_path=sweep_path,
             profile=profile,
+            doc_tag=doc_tag,
         )
         registry = _load_registry(global_registry)
         added = apply_suggestions_to_registry(registry, valid, doc_tag)
@@ -279,6 +280,7 @@ def run_pipeline(
             output_path=global_supertype_map,
             profile=profile,
             model=canonicalize_model,
+            doc_tag=doc_tag,
         )
         print(f"  done ({time.time() - t0:.0f}s)", flush=True)
 
@@ -347,6 +349,7 @@ def run_pipeline(
                     vectors_path=chatbot_index_dir / "vectors.npy",
                     metadata_path=chatbot_index_dir / "metadata.json",
                     auto_yes=auto_yes,
+                    doc_tag=doc_tag,
                 )
                 print(f"  done ({time.time() - t0:.0f}s)", flush=True)
             except RuntimeError as e:

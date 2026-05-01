@@ -133,6 +133,7 @@ def update_index(
     auto_yes: bool = False,
     cost_threshold_usd: float = 0.50,
     force_refresh: bool = False,
+    doc_tag: Optional[str] = None,
 ) -> Dict[str, int]:
     """Embed new/changed entities, persist vectors + metadata. Returns stats."""
     settings = Settings()
@@ -228,11 +229,14 @@ def update_index(
     _save_state(matrix, final_entities, vectors_path, metadata_path)
 
     actual_cost = tokens_used * OPENAI_EMBEDDING_RATE
+    details = {"tokens": tokens_used, "embedded": len(new_rows), "removed": len(removed)}
+    if doc_tag:
+        details["doc_tag"] = doc_tag
     log_cost(
         operation="embed_entities",
         model=EMBEDDING_MODEL,
         cost_usd=actual_cost,
-        details={"tokens": tokens_used, "embedded": len(new_rows), "removed": len(removed)},
+        details=details,
     )
     print(f"  done. tokens: {tokens_used}, cost: ${actual_cost:.4f}, session total: ${session_total():.2f}", flush=True)
 

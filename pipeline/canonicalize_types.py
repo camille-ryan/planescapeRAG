@@ -90,6 +90,7 @@ def canonicalize_types(
     output_path: Path,
     profile: Dict[str, str],
     model: Optional[str] = None,
+    doc_tag: Optional[str] = None,
 ) -> Dict[str, str]:
     settings = Settings()
     if not settings.anthropic_api_key:
@@ -148,7 +149,10 @@ def canonicalize_types(
 
     print(f"\nUsage: input={response.usage.input_tokens}  output={response.usage.output_tokens}")
     from ..cost import report_call
-    report_call("canonicalize_types", chosen_model, response.usage)
+    report_call(
+        "canonicalize_types", chosen_model, response.usage,
+        details={"doc_tag": doc_tag} if doc_tag else None,
+    )
     return mapping
 
 
