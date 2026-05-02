@@ -19,3 +19,15 @@ __pycache__/
 # OS / editor cruft
 .DS_Store
 *.swp
+
+# Source material (copyrighted/trademarked) — never commit
+documents/
+archives/
+*.pdf
+
+# Generated reports containing corpus text
+tools/predicate_scan_report.txt
+tools/degenerate_candidates.txt
+
+# Run logs
+nohup.out

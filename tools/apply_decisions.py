@@ -1,9 +1,15 @@
 """Apply manual cleanup decisions to the global registry.
 
-Reads a YAML file describing entity merges, type changes, and "no-op keeps"
-(audit documentation only). Applies type_changes first, then merges. Always
-writes a registry backup before mutating. Idempotent — running twice is safe
-(the second run finds nothing to do).
+Reads a YAML file describing entity merges, type changes, canonical renames,
+alias removals, entity deletions, and "no-op keeps" (audit documentation only).
+Always writes a registry backup before mutating. Idempotent — running twice is
+safe (the second run finds nothing to do).
+
+Order of operations: type_changes → entity_deletions → merges → canonical_renames
+→ alias_removals → keeps (no-op). Deletions happen before merges so a bogus
+entity (e.g. a pass-1 hallucination) can be removed without first being absorbed
+as an alias of a real one. Renames happen after merges so a merge winner can be
+relabeled afterward.
 
 Usage:
     python -m planescapeRAG.tools.apply_decisions
@@ -16,11 +22,22 @@ YAML schema:
       - canonical: "spell key"
         type: concept                                   # new type
 
+    entity_deletions:                                   # optional
+      - "Spray"                                         # bogus pass-1 hallucination
+
     merges:                                             # optional
       - winner: "The Beastlands"
         losers: [Beastlands]
       - winner: "Sigil"
         losers: ["the city"]                            # multiple losers OK
+
+    canonical_renames:                                  # optional
+      - from: "Marraenoloths"                           # current canonical
+        to: "Marraenoloth"                              # new canonical (old auto-added to aliases)
+
+    alias_removals:                                     # optional
+      - canonical: "Sigil"
+        alias: "Cagers"                                 # alias should be a separate entity
 
     keeps:                                              # optional, no-op
       - [The Ghetto, Ghetto]                            # documented as reviewed
@@ -88,8 +105,25 @@ def apply(
         print(f"  TYPE: {canonical!r}  {old_type!r} → {new_type!r}")
         n_type_changes += 1
 
-    # 2. Merges.
+    # 2. Entity deletions (early, so bogus entries don't get absorbed by a merge).
     drop_indices: set = set()
+    n_deletions = 0
+    for d in decisions.get("entity_deletions") or []:
+        canonical = d if isinstance(d, str) else (d.get("canonical") if isinstance(d, dict) else None)
+        if not canonical:
+            print(f"  DELETE: SKIP (malformed): {d!r}")
+            continue
+        idx = _find_entity(entities, canonical)
+        if idx < 0:
+            print(f"  DELETE: SKIP (not found): {canonical!r}")
+            continue
+        if idx in drop_indices:
+            continue
+        drop_indices.add(idx)
+        print(f"  DELETE: {entities[idx]['canonical_name']!r}")
+        n_deletions += 1
+
+    # 3. Merges.
     n_merges = 0
     for m in decisions.get("merges") or []:
         winner_name: Optional[str] = m.get("winner")
@@ -149,13 +183,70 @@ def apply(
         print(f"  MERGE: {winner_name!r}  ←  {loser_display}")
         n_merges += 1
 
-    # 3. Keeps — log only, no mutation.
+    # 4. Canonical renames (after merges so a merge winner can be relabeled).
+    n_renames = 0
+    for r in decisions.get("canonical_renames") or []:
+        from_name = r.get("from") if isinstance(r, dict) else None
+        to_name = r.get("to") if isinstance(r, dict) else None
+        if not from_name or not to_name:
+            print(f"  RENAME: SKIP (malformed): {r!r}")
+            continue
+        idx = _find_entity(entities, from_name)
+        if idx < 0:
+            print(f"  RENAME: SKIP (not found): {from_name!r}")
+            continue
+        if idx in drop_indices:
+            print(f"  RENAME: SKIP (already deleted/merged-away): {from_name!r}")
+            continue
+        # Reject if the target name is the canonical of a different surviving entity.
+        existing = _find_entity(entities, to_name)
+        if existing >= 0 and existing != idx and existing not in drop_indices:
+            print(f"  RENAME: SKIP (target {to_name!r} collides with surviving entity {entities[existing]['canonical_name']!r})")
+            continue
+        entity = entities[idx]
+        old_canonical = entity["canonical_name"]
+        if old_canonical == to_name:
+            print(f"  RENAME: SKIP (already {to_name!r})")
+            continue
+        entity["canonical_name"] = to_name
+        aliases = list(entity.get("aliases") or [])
+        if old_canonical.lower() not in {a.lower() for a in aliases}:
+            aliases.insert(0, old_canonical)
+        entity["aliases"] = aliases
+        print(f"  RENAME: {old_canonical!r} → {to_name!r}")
+        n_renames += 1
+
+    # 5. Alias removals.
+    n_alias_removals = 0
+    for ar in decisions.get("alias_removals") or []:
+        canonical = ar.get("canonical") if isinstance(ar, dict) else None
+        alias_to_remove = ar.get("alias") if isinstance(ar, dict) else None
+        if not canonical or not alias_to_remove:
+            print(f"  ALIAS_REMOVE: SKIP (malformed): {ar!r}")
+            continue
+        idx = _find_entity(entities, canonical)
+        if idx < 0:
+            print(f"  ALIAS_REMOVE: SKIP (not found): {canonical!r}")
+            continue
+        if idx in drop_indices:
+            continue
+        entity = entities[idx]
+        aliases = entity.get("aliases") or []
+        new_aliases = [a for a in aliases if a.lower() != alias_to_remove.lower()]
+        if len(new_aliases) == len(aliases):
+            print(f"  ALIAS_REMOVE: SKIP (alias {alias_to_remove!r} not present on {canonical!r})")
+            continue
+        entity["aliases"] = new_aliases
+        print(f"  ALIAS_REMOVE: {canonical!r} − {alias_to_remove!r}")
+        n_alias_removals += 1
+
+    # 6. Keeps — log only, no mutation.
     keeps = decisions.get("keeps") or []
     for k in keeps:
         if isinstance(k, list) and len(k) >= 2:
             print(f"  KEEP: {k}")
 
-    # 4. Save.
+    # 7. Save.
     if not dry_run:
         kept_entities = [e for i, e in enumerate(entities) if i not in drop_indices]
         reg["entities"] = kept_entities
@@ -166,9 +257,12 @@ def apply(
 
     print()
     print("Summary:")
-    print(f"  type_changes applied: {n_type_changes}")
-    print(f"  merges applied:       {n_merges}")
-    print(f"  keeps documented:     {len(keeps)}")
+    print(f"  type_changes applied:    {n_type_changes}")
+    print(f"  entity_deletions:        {n_deletions}")
+    print(f"  merges applied:          {n_merges}")
+    print(f"  canonical_renames:       {n_renames}")
+    print(f"  alias_removals:          {n_alias_removals}")
+    print(f"  keeps documented:        {len(keeps)}")
     print(f"  registry: {len(entities)} → {final_count} entities" + (" (dry-run)" if dry_run else ""))
 
     return n_type_changes, n_merges, len(keeps)
