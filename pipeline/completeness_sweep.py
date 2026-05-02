@@ -113,12 +113,30 @@ def _build_system_prompt(profile: Optional[Dict[str, str]]) -> str:
     return _SYSTEM_PROMPT_BASE
 
 
-def _slim_registry_payload(registry: dict) -> str:
+def _slim_registry_payload(registry: dict, doc_text: Optional[str] = None) -> str:
+    """Render the registry as `[{canonical_name, aliases}]` JSON for the
+    completeness-sweep prompt.
+
+    When `doc_text` is supplied, filter to entries whose canonical_name or any
+    alias appears verbatim (case-insensitive substring) in the document. This
+    keeps sweep input bounded as the corpus grows: instead of sending the
+    entire registry (which scales linearly with total ingested entities), we
+    send only the slice the doc could plausibly be referring to. False
+    positives are harmless (just a few extra entries); the LLM's filtering
+    rule is unchanged.
+    """
+    doc_lower = doc_text.lower() if doc_text else None
     entries = []
     for e in registry["entities"]:
-        item = {"canonical_name": e["canonical_name"]}
-        if e.get("aliases"):
-            item["aliases"] = e["aliases"]
+        canonical = e["canonical_name"]
+        aliases = e.get("aliases") or []
+        if doc_lower is not None:
+            terms = [canonical] + list(aliases)
+            if not any(t and t.lower() in doc_lower for t in terms):
+                continue
+        item = {"canonical_name": canonical}
+        if aliases:
+            item["aliases"] = aliases
         entries.append(item)
     return json.dumps(entries, ensure_ascii=False, indent=1)
 
@@ -151,7 +169,7 @@ def sweep_for_missing(
 
     with registry_path.open() as f:
         registry = json.load(f)
-    registry_text = _slim_registry_payload(registry)
+    registry_text = _slim_registry_payload(registry, doc_text=document)
 
     user_message = (
         f"<document>\n{document}\n</document>\n\n"
@@ -160,7 +178,14 @@ def sweep_for_missing(
     )
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    print(f"Running completeness sweep with {chosen_model}... (document: {len(document)} chars, registry: {len(registry['entities'])} entities)", flush=True)
+    n_relevant = registry_text.count('"canonical_name"')
+    print(
+        f"Running completeness sweep with {chosen_model}... "
+        f"(document: {len(document)} chars, "
+        f"registry: {len(registry['entities'])} entities, "
+        f"relevant slice: {n_relevant})",
+        flush=True,
+    )
 
     with client.messages.stream(
         model=chosen_model,
