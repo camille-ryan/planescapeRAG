@@ -73,10 +73,20 @@ Use the descriptions and aliases to decide each pair.
 - Singular/plural of the same entity ('Slaadi' vs 'slaad')
 - OCR-style spelling variants ('Cavitius' vs 'Caviitus' — same fortress)
 - Known synonyms or alternative names for the same thing
+- For type='creature' or type='concept' (categories, not individuals):
+  case variants ALWAYS merge. Two mentions of 'Vargouille' and 'vargouille'
+  in different locations are still the same species — locations don't
+  make a creature type into different entities. Apply the same logic to
+  concept-type entries: 'Rule of Three' and 'rule of three' are the same
+  abstract concept. Only consider splitting category-type pairs when the
+  names are actually DIFFERENT (e.g., 'tanar'ri' vs 'baatezu'), not when
+  they're case variants.
 
 # Decide are_same_entity = false when:
 - Different members of a pantheon or related category (different gods, different planes)
 - Similar names that the descriptions clarify are distinct concepts
+- For type='character' specifically: two characters can share a name but
+  be distinct individuals — use descriptions to judge.
 - Anything where you're not confident — when in doubt, don't merge
 
 For every pair, set pair_index to match the input ordering. Include a one-sentence reasoning."""
