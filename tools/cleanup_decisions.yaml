@@ -99,6 +99,14 @@ merges:
   - winner: Vargouille
     losers: [vargouille]
 
+  # ── OCR phantom: 'kytonia' is a single-instance mis-OCR of 'yugoloths' ──
+  # in in_the_cage. The bad text was fixed in ocr/in_the_cage.md; the registry
+  # entry just absorbs the source_documents tag. (yugoloth's existing entity
+  # file won't pick up the in_the_cage page citation without a re-pass-2 of
+  # that doc — minor coverage gap, deferred.)
+  - winner: yugoloth
+    losers: [kytonia]
+
 
 # Reviewed and intentionally kept separate. No action — for audit / future-self reference.
 keeps:
@@ -130,6 +138,5 @@ keeps:
   - [Felliz, Fell]                             # planewalker vs dabus
   - [Gazra, Gaz]                               # ash empire leader vs tiefling tax-collector
   - [Hivers, Hive]                             # demonym vs ward — could merge as alias; review
-  - [kytonia, Kyton]                           # possibly same; descriptions don't quite match
   - [Memedi, Meme]                             # different creatures
   - [Rigus, Rig]                               # gate-town vs tiefling
