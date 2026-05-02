@@ -6,6 +6,10 @@ tmp/
 graph/
 ocr/
 chatbot/index/
+chatbot/page_cache/
+
+# Spend ledger — local audit, not for sharing
+cost_log.jsonl
 
 # Python bytecode
 __pycache__/

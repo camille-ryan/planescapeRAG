@@ -48,7 +48,7 @@ _PACKAGE_DIR = Path(__file__).resolve().parent                    # chatbot/
 DEFAULT_ENTITIES_DIR = _PROJECT_ROOT / "graph" / "entities"
 DEFAULT_INDEX_DIR = _PROJECT_ROOT / "chatbot" / "index"
 DOC_SOURCES_PATH = _PACKAGE_DIR / "doc_sources.json"
-PAGE_CACHE_DIR = _PROJECT_ROOT / "tmp" / "page_cache"
+PAGE_CACHE_DIR = _PACKAGE_DIR / "page_cache"
 PAGE_RENDER_DPI = 150
 
 

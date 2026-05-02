@@ -49,7 +49,7 @@ PRICING: Dict[str, Dict[str, float]] = {
 }
 
 
-_DEFAULT_LOG_PATH = Path("planescapeRAG/tmp/cost_log.jsonl")
+_DEFAULT_LOG_PATH = Path("planescapeRAG/cost_log.jsonl")
 
 
 def _log_path() -> Path:
