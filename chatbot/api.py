@@ -203,8 +203,13 @@ def chat(
     request: Request,
     question: str = Form(...),
     k: int = Form(5),
-    max_total: int = Form(15),
-    expand: bool = Form(False),  # checkbox: present='true', absent=missing
+    max_total: int = Form(25),
+    # NB: per FastAPI form semantics, an unchecked checkbox is missing from the
+    # POST body, which means this default kicks in. Default ON so wikilink
+    # expansion (forward + reverse) runs unless the user explicitly disables —
+    # without expansion, queries like "members of Harmonium" only see the
+    # 5 vector-matched primaries, missing the 121 character members linked back.
+    expand: bool = Form(True),
     model: str = Form(DEFAULT_MODEL),
 ):
     if model not in SUPPORTED_MODELS:

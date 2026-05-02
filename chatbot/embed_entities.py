@@ -32,6 +32,88 @@ EMBEDDING_DIM = 1536
 # USD per token (text-embedding-3-small is $0.020 / 1M tokens)
 OPENAI_EMBEDDING_RATE = 0.020 / 1_000_000
 
+# OpenAI's text-embedding-3-small caps input at 8192 tokens. We embed at the
+# `## Source: <doc_tag>` SECTION level rather than the full entity body — each
+# section is a self-contained source-grounded description and almost always
+# fits well under the cap. Defensive truncation (~6.5K tokens at 4 chars/token)
+# is kept for the rare oversize section.
+_EMBED_MAX_CHARS = 25000
+
+# Marker for entities with no per-source structure (e.g. early-format entity
+# files that predate the `## Source:` convention). The whole body becomes one
+# section with this id.
+_MAIN_SECTION = "main"
+
+
+def _truncate_for_embedding(text: str) -> Tuple[str, bool]:
+    """Hard char cap to absorb token-density variance from non-ASCII text and
+    code. With per-section embedding this rarely fires — only the densest
+    individual sections trip it.
+    """
+    if len(text) <= _EMBED_MAX_CHARS:
+        return text, False
+    return text[:_EMBED_MAX_CHARS], True
+
+
+_SOURCE_HEADER_RE = re.compile(r"^## Source: (.+?)$", re.MULTILINE)
+_RELATIONSHIPS_BLOCK_RE = re.compile(r"\n### Relationships from .+?$.*?(?=\n## |\Z)", re.DOTALL | re.MULTILINE)
+
+
+def _strip_relationship_quotes(text: str) -> str:
+    """Drop `### Relationships from <doc>` blocks. The verbatim quotes are
+    high-noise for embedding — each is unique text but adds little semantic
+    signal, since the wikilinks in the prose already carry the relational
+    meaning.
+    """
+    return _RELATIONSHIPS_BLOCK_RE.sub("", text).rstrip() + "\n"
+
+
+def _split_into_sections(body: str) -> List[Tuple[str, str]]:
+    """Split an entity body into per-source sections.
+
+    Returns [(section_id, section_text), ...] where:
+    - section_id is the `## Source: <doc_tag>` value, or `_MAIN_SECTION` if
+      the body doesn't follow the per-source convention
+    - section_text is the prose between this header and the next, with the
+      `### Relationships from X` block stripped (see `_strip_relationship_quotes`)
+    """
+    matches = list(_SOURCE_HEADER_RE.finditer(body))
+    if not matches:
+        # No per-source structure — treat the whole body as one section.
+        return [(_MAIN_SECTION, _strip_relationship_quotes(body.strip()))]
+
+    sections = []
+    for i, m in enumerate(matches):
+        section_id = m.group(1).strip()
+        section_start = m.end()
+        section_end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        raw = body[section_start:section_end]
+        cleaned = _strip_relationship_quotes(raw.strip())
+        if cleaned.strip():
+            sections.append((section_id, cleaned))
+    return sections
+
+
+def _build_embedding_text(canonical_name: str, aliases: List[str], section_id: str, section_text: str) -> str:
+    """Compose the per-section text sent to the embedder.
+
+    Includes the entity's canonical name + aliases as a header so each section
+    vector also carries the entity-identity signal — important when sections
+    are short and heavily wikilink-driven.
+    """
+    parts = [f"# {canonical_name}"]
+    if aliases:
+        parts.append(f"Also known as: {', '.join(aliases)}")
+    if section_id != _MAIN_SECTION:
+        parts.append(f"From source: {section_id}")
+    parts.append("")
+    parts.append(section_text)
+    return "\n".join(parts).strip()
+
+
+def _section_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
 
 def _parse_entity_file(path: Path) -> Tuple[Dict[str, object], str]:
     """Return (frontmatter_kv, body_text). Frontmatter is parsed naively but
@@ -70,18 +152,29 @@ def _body_hash(body: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def _walk_entities(entities_dir: Path) -> Dict[str, Tuple[Path, Dict[str, str], str, str]]:
-    """Return {entity_id: (path, frontmatter, body, hash)} for every .md under entities_dir.
+def _walk_entities(entities_dir: Path) -> Dict[Tuple[str, str], Tuple[Path, Dict[str, object], str, str]]:
+    """Return {(entity_id, section_id): (path, frontmatter, embed_text, hash)}
+    for every per-source section in every .md under entities_dir.
 
     entity_id is the path relative to entities_dir without the .md suffix,
-    e.g. 'character/abacis-the-sweaty'.
+    e.g. 'character/abacis-the-sweaty'. section_id is the `## Source: <doc>`
+    value or `_MAIN_SECTION` for entities with no per-source structure.
+
+    embed_text is the section text composed for embedding (with header anchor).
+    Hash is over embed_text — change-detection is per section, so adding a new
+    `## Source:` section to Sigil only re-embeds that one new vector.
     """
-    out: Dict[str, Tuple[Path, Dict[str, str], str, str]] = {}
+    out: Dict[Tuple[str, str], Tuple[Path, Dict[str, object], str, str]] = {}
     for path in sorted(entities_dir.rglob("*.md")):
         rel = path.relative_to(entities_dir)
         entity_id = str(rel.with_suffix("")).replace("\\", "/")
         fm, body = _parse_entity_file(path)
-        out[entity_id] = (path, fm, body, _body_hash(body))
+        canonical = str(fm.get("canonical_name") or entity_id)
+        aliases_raw = fm.get("aliases") or []
+        aliases = [a for a in aliases_raw if isinstance(a, str) and a.strip()] if isinstance(aliases_raw, list) else []
+        for section_id, section_text in _split_into_sections(body):
+            embed_text = _build_embedding_text(canonical, aliases, section_id, section_text)
+            out[(entity_id, section_id)] = (path, fm, embed_text, _section_hash(embed_text))
     return out
 
 
@@ -113,9 +206,29 @@ def _save_state(
 
 
 def _embed_batch(client: OpenAI, texts: List[str]) -> Tuple[np.ndarray, int]:
-    resp = client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
-    vectors = np.array([d.embedding for d in resp.data], dtype=np.float32)
-    return vectors, resp.usage.total_tokens
+    # Defensive truncation — OpenAI rejects the entire batch if any single input
+    # exceeds 8192 tokens, taking down 99 well-formed entities with one oversized one.
+    safe_texts = [_truncate_for_embedding(t)[0] for t in texts]
+    # Retry on TPM rate limits with capped exponential backoff. The SDK's built-in
+    # retry handles 429s but gives up after a few attempts; per-section rebuilds
+    # over the full corpus consistently bump the 1M TPM ceiling for ~minutes.
+    import time as _time
+
+    from openai import RateLimitError
+
+    delay = 2.0
+    for attempt in range(8):
+        try:
+            resp = client.embeddings.create(model=EMBEDDING_MODEL, input=safe_texts)
+            vectors = np.array([d.embedding for d in resp.data], dtype=np.float32)
+            return vectors, resp.usage.total_tokens
+        except RateLimitError as e:
+            if attempt == 7:
+                raise
+            print(f"    rate limit hit (attempt {attempt + 1}/8); sleeping {delay:.0f}s...", flush=True)
+            _time.sleep(delay)
+            delay = min(delay * 2, 60.0)
+    raise RuntimeError("unreachable")
 
 
 def _l2_normalize(v: np.ndarray) -> np.ndarray:
@@ -142,86 +255,115 @@ def update_index(
 
     on_disk = _walk_entities(entities_dir)
     old_vectors, old_entities = _load_state(vectors_path, metadata_path)
-    old_by_id = {e["entity_id"]: (i, e) for i, e in enumerate(old_entities)}
+    # Per-section keying. Old entries without section_id are pre-Option-C (full-body
+    # embeddings) — treat them as missing so the migration re-embeds at section level.
+    old_by_key = {
+        (e["entity_id"], e.get("section_id", _MAIN_SECTION)): (i, e)
+        for i, e in enumerate(old_entities)
+        if e.get("section_id")  # require section_id for compatibility match
+    }
 
-    to_embed: List[Tuple[str, str]] = []   # (entity_id, body)
-    keep_old: List[Tuple[str, int]] = []    # (entity_id, old_row_index)
-    for entity_id, (_, _, body, h) in on_disk.items():
-        prev = old_by_id.get(entity_id)
+    to_embed: List[Tuple[Tuple[str, str], str]] = []   # ((entity_id, section_id), embed_text)
+    keep_old: List[Tuple[Tuple[str, str], int]] = []    # ((entity_id, section_id), old_row_index)
+    for key, (_, _, embed_text, h) in on_disk.items():
+        prev = old_by_key.get(key)
         if prev is None or prev[1].get("content_hash") != h:
-            to_embed.append((entity_id, body))
+            to_embed.append((key, embed_text))
         else:
-            keep_old.append((entity_id, prev[0]))
+            keep_old.append((key, prev[0]))
 
-    removed = [eid for eid in old_by_id if eid not in on_disk]
+    removed = [k for k in old_by_key if k not in on_disk]
 
-    print(f"  on disk: {len(on_disk)} entities", flush=True)
-    print(f"  unchanged: {len(keep_old)}", flush=True)
-    print(f"  new or changed: {len(to_embed)}", flush=True)
-    print(f"  removed: {len(removed)}", flush=True)
+    n_entities = len(set(eid for eid, _ in on_disk))
+    print(f"  on disk: {n_entities} entities, {len(on_disk)} sections", flush=True)
+    print(f"  unchanged sections: {len(keep_old)}", flush=True)
+    print(f"  new or changed sections: {len(to_embed)}", flush=True)
+    print(f"  removed sections: {len(removed)}", flush=True)
 
-    # If metadata is missing fields we now record (e.g. aliases added in a later
-    # release), force a metadata refresh even when no bodies changed. The
-    # rebuild reuses existing vectors — it just rewrites the JSON sidecar.
+    # Pre-Option-C metadata didn't store section_id. If we see entries without it,
+    # the index needs a full rebuild (every entity becomes per-section).
     metadata_stale = old_vectors is not None and any(
-        "aliases" not in e for e in old_entities
+        not e.get("section_id") for e in old_entities
     )
+    if metadata_stale:
+        print("  detected pre-section metadata; rebuilding index per-section.", flush=True)
 
     if not to_embed and not removed and old_vectors is not None and not metadata_stale and not force_refresh:
         print("  no changes; index up to date.", flush=True)
-        return {"on_disk": len(on_disk), "embedded": 0, "removed": 0, "cost_usd": 0.0}
+        return {"on_disk": n_entities, "sections": len(on_disk), "embedded": 0, "removed": 0, "cost_usd": 0.0}
 
     if not to_embed and (metadata_stale or force_refresh):
-        print("  refreshing metadata (no embedding changes; aliases / new fields)", flush=True)
+        print("  refreshing metadata (no embedding changes; new fields)", flush=True)
 
     if to_embed:
-        total_chars = sum(len(b) for _, b in to_embed)
+        # Apply truncation up-front so the cost estimate matches what's actually sent.
+        truncated_keys = []
+        sized_to_embed = []
+        for key, embed_text in to_embed:
+            text, was_cut = _truncate_for_embedding(embed_text)
+            sized_to_embed.append((key, text))
+            if was_cut:
+                truncated_keys.append((key, len(embed_text), len(text)))
+        to_embed = sized_to_embed
+        total_chars = sum(len(t) for _, t in to_embed)
         est_tokens = max(1, total_chars // 4)
         est_cost = est_tokens * OPENAI_EMBEDDING_RATE
-        print(f"  estimated cost: ${est_cost:.4f} (~{est_tokens} tokens)", flush=True)
+        print(f"  estimated cost: ${est_cost:.4f} (~{est_tokens} tokens across {len(to_embed)} sections)", flush=True)
+        if truncated_keys:
+            print(f"  truncated {len(truncated_keys)} oversized sections to fit the 8192-token cap:", flush=True)
+            for (eid, sid), before, after in sorted(truncated_keys, key=lambda x: -x[1])[:10]:
+                print(f"    {eid}#{sid}: {before} → {after} chars", flush=True)
+            if len(truncated_keys) > 10:
+                print(f"    ... and {len(truncated_keys) - 10} more", flush=True)
         if not auto_yes and est_cost > cost_threshold_usd:
             ans = input(f"  estimate exceeds ${cost_threshold_usd:.2f} — proceed? [y/N]: ").strip().lower()
             if ans != "y":
                 print("  aborted.", flush=True)
-                return {"on_disk": len(on_disk), "embedded": 0, "removed": 0, "aborted": True}
+                return {"on_disk": n_entities, "sections": len(on_disk), "embedded": 0, "removed": 0, "aborted": True}
 
     client = OpenAI(api_key=settings.openai_api_key)
-    new_rows: Dict[str, np.ndarray] = {}
+    new_rows: Dict[Tuple[str, str], np.ndarray] = {}
     tokens_used = 0
     for i in range(0, len(to_embed), batch_size):
         batch = to_embed[i:i + batch_size]
-        vecs, toks = _embed_batch(client, [b for _, b in batch])
+        vecs, toks = _embed_batch(client, [t for _, t in batch])
         tokens_used += toks
-        for (entity_id, _), vec in zip(batch, vecs):
-            new_rows[entity_id] = vec
-        print(f"  batch {i // batch_size + 1}: embedded {len(batch)} (tokens: {toks})", flush=True)
+        for (key, _), vec in zip(batch, vecs):
+            new_rows[key] = vec
+        print(f"  batch {i // batch_size + 1}: embedded {len(batch)} sections (tokens: {toks})", flush=True)
 
     # Assemble final state in stable order: existing entries first (preserving relative
     # order), then newly-embedded entries.
     final_entities: List[dict] = []
     final_vectors: List[np.ndarray] = []
 
-    def _meta_entry(entity_id: str, fm: dict, h: str) -> dict:
+    def _meta_entry(entity_id: str, section_id: str, fm: dict, h: str) -> dict:
         aliases = fm.get("aliases") or []
         if not isinstance(aliases, list):
             aliases = []
         return {
             "entity_id": entity_id,
+            "section_id": section_id,
             "content_hash": h,
             "canonical_name": fm.get("canonical_name", ""),
             "type": fm.get("type", ""),
             "aliases": [a for a in aliases if isinstance(a, str) and a.strip()],
         }
 
-    for entity_id, old_row in keep_old:
-        path, fm, _, h = on_disk[entity_id]
-        final_entities.append(_meta_entry(entity_id, fm, h))
-        final_vectors.append(old_vectors[old_row])
+    # When migrating from a pre-section index, skip keep_old (old vectors are full-body
+    # embeddings and don't correspond to sections) — fall through to re-embed everything.
+    if not metadata_stale:
+        for key, old_row in keep_old:
+            entity_id, section_id = key
+            path, fm, _, h = on_disk[key]
+            final_entities.append(_meta_entry(entity_id, section_id, fm, h))
+            final_vectors.append(old_vectors[old_row])
 
-    for entity_id, _ in to_embed:
-        path, fm, _, h = on_disk[entity_id]
-        final_entities.append(_meta_entry(entity_id, fm, h))
-        final_vectors.append(new_rows[entity_id])
+    for key, _ in to_embed:
+        entity_id, section_id = key
+        path, fm, _, h = on_disk[key]
+        final_entities.append(_meta_entry(entity_id, section_id, fm, h))
+        final_vectors.append(new_rows[key])
 
     matrix = np.vstack(final_vectors).astype(np.float32) if final_vectors else np.zeros((0, EMBEDDING_DIM), dtype=np.float32)
     matrix = _l2_normalize(matrix)
