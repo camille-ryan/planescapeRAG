@@ -59,6 +59,14 @@ class Doc(NamedTuple):
 
 DOCS: List[Doc] = [
     # Boxed Sets — canonical
+    Doc("planescapeRAG/documents/Boxed Sets/TSR 2600 Planescape Campaign Setting.pdf",
+        "campaign_setting", "canonical", "Planescape Campaign Setting"),
+    Doc("planescapeRAG/documents/Boxed Sets/TSR 2603 Planes of Chaos.pdf",
+        "planes_of_chaos", "canonical", "Planes of Chaos"),
+    Doc("planescapeRAG/documents/Boxed Sets/TSR 2607 Planes of Law.pdf",
+        "planes_of_law", "canonical", "Planes of Law"),
+    Doc("planescapeRAG/documents/Boxed Sets/TSR 2610 Player's Primer to the Outlands.pdf",
+        "players_primer_to_the_outlands", "canonical", "Player's Primer to the Outlands"),
     Doc("planescapeRAG/documents/Boxed Sets/TSR 2615 Planes of Conflict.pdf",
         "planes_of_conflict", "canonical", "Planes of Conflict"),
     Doc("planescapeRAG/documents/Boxed Sets/TSR 2621 Hellbound The Blood War.pdf",
