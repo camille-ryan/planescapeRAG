@@ -31,6 +31,23 @@ from ..cost import (
 from .ocr import apply_ocr_corrections, load_corpus_profile, parse_ocr_corrections
 
 
+# Default model for non-notable entities (single-mention NPCs, minor items, etc.).
+# Sonnet pricing is 3x Haiku — routing the long tail to Haiku saves ~30%/doc.
+# Dated form matches the cost.py PRICING table key.
+_DEFAULT_MINOR_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _choose_model(entity: dict, notable_model: str, minor_model: str) -> str:
+    """Route the entity to Sonnet (notable) or Haiku (everything else).
+
+    Notable=True is set by pass-1 for factions, planes, major characters — the
+    entities whose profiles drive most of the downstream graph value. Everything
+    else (rare items, single-mention NPCs, generic concepts) gets Haiku, which
+    is sufficient for the briefer profiles those entities produce.
+    """
+    return notable_model if entity.get("notable") else minor_model
+
+
 _SUBMIT_ENTITY_PROFILE_TOOL = {
     "name": "submit_entity_profile",
     "description": "Submit the structured profile for the current entity. Call this exactly once.",
@@ -204,12 +221,17 @@ def _fuzzy_find_quote(emitted: str, document: str, max_internal_edits: int = 5) 
 
 
 def _build_registry_payload(registry: dict) -> str:
-    """Compact JSON list of entities, suitable for inclusion in the cached prefix."""
+    """Compact JSON list of entities, suitable for inclusion in the cached prefix.
+
+    Aliases are intentionally dropped: the model writes wikilinks as
+    [[Canonical Name]] only, never aliases. Aliases were only used by the pass-1
+    windowing scan (already done by submit time). Saves ~10 tokens per entity
+    in the local-registry slice — meaningful at 50–100 entities per window.
+    """
     entries = [
         {
             "canonical_name": e["canonical_name"],
             "type": e["type"],
-            "aliases": e.get("aliases", []) or [],
             "brief_description": e["brief_description"],
         }
         for e in registry["entities"]
@@ -286,31 +308,76 @@ def _parse_document_paragraphs(document: str) -> List[Tuple[str, Optional[int]]]
     return paragraphs
 
 
-def _build_windowed_context(
+def _build_mention_index(
     paragraphs: List[Tuple[str, Optional[int]]],
-    entity: dict,
-    neighbor_paras: int = 1,
-) -> Optional[str]:
-    """Find paragraphs mentioning the entity (canonical or alias) and return them
-    plus N neighbor paragraphs on each side, with page markers preserved and
-    `[...]` between non-contiguous spans. Returns None if no matches found.
+    registry: dict,
+) -> Tuple[Dict[int, Set[str]], Dict[str, List[int]]]:
+    """One pass over paragraphs to record which canonical names appear in each.
+
+    Returns (mentions, by_canon):
+      mentions[i]: set of canonicals mentioned in paragraph i
+      by_canon[c]: ordered list of paragraph indices that mention canonical c
+
+    Replaces O(N_entities × N_paragraphs) per-entity scans with a single combined
+    regex pass. Two design choices preserved from the per-entity behavior:
+
+    - Longest-first alternation: when two registered names overlap (e.g. 'Sigil'
+      and the book title 'In Darkest Sigil'), the longer match wins, so a book
+      mention isn't credited to the city.
+    - Multi-valued name → canonicals: when the same name is shared by multiple
+      registry entries (e.g. the plane 'Paraelemental Plane of Ice' has 'Ice' as
+      an alias AND 'Ice' is also the canonical of a tiefling NPC), the paragraph
+      is credited to every claimant. The model then disambiguates per-paragraph
+      when writing each entity's profile.
     """
-    search_terms = [entity["canonical_name"]] + (entity.get("aliases") or [])
-    if not search_terms:
-        return None
+    name_to_canons: Dict[str, Set[str]] = {}
+    for entity in registry["entities"]:
+        canon = entity["canonical_name"]
+        for name in [canon] + (entity.get("aliases") or []):
+            if name:
+                name_to_canons.setdefault(name.lower(), set()).add(canon)
+    if not name_to_canons:
+        return {}, {}
+
+    sorted_names = sorted(name_to_canons, key=len, reverse=True)
     pattern = re.compile(
-        r"\b(?:" + "|".join(re.escape(t) for t in search_terms) + r")\b",
+        r"\b(?:" + "|".join(re.escape(n) for n in sorted_names) + r")\b",
         re.IGNORECASE,
     )
 
-    selected: Set[int] = set()
+    mentions: Dict[int, Set[str]] = {}
+    by_canon: Dict[str, List[int]] = {}
     for i, (text, _) in enumerate(paragraphs):
-        if pattern.search(text):
-            for j in range(max(0, i - neighbor_paras), min(len(paragraphs), i + neighbor_paras + 1)):
-                selected.add(j)
+        seen: Set[str] = set()
+        for m in pattern.finditer(text):
+            for canon in name_to_canons.get(m.group(0).lower(), ()):
+                if canon not in seen:
+                    seen.add(canon)
+                    by_canon.setdefault(canon, []).append(i)
+        if seen:
+            mentions[i] = seen
+    return mentions, by_canon
 
-    if not selected:
+
+def _build_windowed_context(
+    paragraphs: List[Tuple[str, Optional[int]]],
+    entity: dict,
+    by_canon: Dict[str, List[int]],
+    neighbor_paras: int = 1,
+) -> Optional[Tuple[str, Set[int]]]:
+    """Find paragraphs mentioning the entity (via the precomputed index) and
+    return them plus N neighbor paragraphs on each side, with page markers
+    preserved and `[...]` between non-contiguous spans. Returns
+    (context, selected_idxs) or None if no mentions found.
+    """
+    matched = by_canon.get(entity["canonical_name"], [])
+    if not matched:
         return None
+
+    selected: Set[int] = set()
+    for i in matched:
+        for j in range(max(0, i - neighbor_paras), min(len(paragraphs), i + neighbor_paras + 1)):
+            selected.add(j)
 
     chunks: List[str] = []
     last_page: Optional[int] = None
@@ -326,42 +393,32 @@ def _build_windowed_context(
         chunks.append(text)
         last_index = i
 
-    return "\n\n".join(chunks)
+    return "\n\n".join(chunks), selected
 
 
-def _build_local_registry_payload(context: str, registry: dict, exclude_canonical: Optional[str] = None) -> str:
-    """Filter the global registry to entities whose canonical_name or alias is
-    word-boundary mentioned in `context`. Same JSON shape as the global payload.
-
-    This is the right shape for any registry that gets large enough that
-    sending the whole thing per request becomes wasteful or impossible.
+def _build_local_registry_payload(
+    selected_para_idxs: Set[int],
+    entity_by_canonical: Dict[str, dict],
+    mentions: Dict[int, Set[str]],
+    exclude_canonical: Optional[str] = None,
+) -> str:
+    """Local registry slice: entities mentioned in any of the selected paragraphs
+    (per the precomputed inverted index). Same JSON shape as the global payload.
     """
-    context_lower = context.lower()
-    relevant = []
-    seen: Set[str] = set()
-    for entity in registry["entities"]:
-        canon = entity["canonical_name"]
-        if canon == exclude_canonical or canon in seen:
-            continue
-        names = [canon] + (entity.get("aliases") or [])
-        for name in names:
-            if not name:
-                continue
-            try:
-                if re.search(rf"\b{re.escape(name)}\b", context_lower, re.IGNORECASE):
-                    relevant.append(entity)
-                    seen.add(canon)
-                    break
-            except re.error:
-                continue
+    canon_set: Set[str] = set()
+    for i in selected_para_idxs:
+        canon_set.update(mentions.get(i, ()))
+    if exclude_canonical:
+        canon_set.discard(exclude_canonical)
+
     entries = [
         {
             "canonical_name": e["canonical_name"],
             "type": e["type"],
-            "aliases": e.get("aliases", []) or [],
             "brief_description": e["brief_description"],
         }
-        for e in relevant
+        for c in canon_set
+        if (e := entity_by_canonical.get(c)) is not None
     ]
     return json.dumps(entries, ensure_ascii=False, indent=1)
 
@@ -369,7 +426,9 @@ def _build_local_registry_payload(context: str, registry: dict, exclude_canonica
 def _build_request_windowed(
     entity: dict,
     paragraphs: List[Tuple[str, Optional[int]]],
-    registry: dict,
+    entity_by_canonical: Dict[str, dict],
+    mentions: Dict[int, Set[str]],
+    by_canon: Dict[str, List[int]],
     model: str,
     cache_ttl: str,
     neighbor_paras: int,
@@ -382,11 +441,12 @@ def _build_request_windowed(
     little, and removes a known-flaky variable (batch cache writes were
     accumulating ~10x estimate on the PoL run).
     """
-    context = _build_windowed_context(paragraphs, entity, neighbor_paras=neighbor_paras)
-    if context is None:
+    result = _build_windowed_context(paragraphs, entity, by_canon, neighbor_paras=neighbor_paras)
+    if result is None:
         return None
+    context, selected = result
     local_registry_text = _build_local_registry_payload(
-        context, registry, exclude_canonical=entity["canonical_name"]
+        selected, entity_by_canonical, mentions, exclude_canonical=entity["canonical_name"]
     )
     instruction = (
         f"<context>\n{context}\n</context>\n\n"
@@ -666,6 +726,7 @@ def submit_profiles(
     doc_tag: str,
     corpus_profile: Optional[Dict[str, str]] = None,
     model: Optional[str] = None,
+    minor_model: Optional[str] = None,
     cache_ttl: str = "1h",
     skip_existing: bool = True,
     mode: str = "fulldoc",
@@ -677,6 +738,10 @@ def submit_profiles(
     if not settings.anthropic_api_key:
         raise ValueError("ANTHROPIC_API_KEY must be set.")
     chosen_model = model or settings.extraction_model
+    # Two-tier routing applies in windowed mode only — fulldoc mode caches a
+    # single shared prefix per request, which would defeat caching if the model
+    # changed per request. In windowed mode there's no cached prefix anyway.
+    chosen_minor_model = minor_model or _DEFAULT_MINOR_MODEL if mode == "windowed" else chosen_model
 
     document = document_path.read_text()
     corrections = parse_ocr_corrections(corpus_profile) if corpus_profile else {}
@@ -694,8 +759,15 @@ def submit_profiles(
     if mode not in {"fulldoc", "windowed"}:
         raise ValueError(f"Unknown mode: {mode!r}. Use 'fulldoc' or 'windowed'.")
     paragraphs = _parse_document_paragraphs(document) if mode == "windowed" else None
+    mentions: Dict[int, Set[str]] = {}
+    by_canon: Dict[str, List[int]] = {}
+    entity_by_canonical: Dict[str, dict] = {}
     if paragraphs is not None:
         print(f"Windowed mode: parsed {len(paragraphs)} paragraphs from document; neighbor_paras={neighbor_paras}", flush=True)
+        index_t0 = time.time()
+        mentions, by_canon = _build_mention_index(paragraphs, registry)
+        entity_by_canonical = {e["canonical_name"]: e for e in registry["entities"]}
+        print(f"Built mention index over {len(registry['entities'])} entities in {time.time() - index_t0:.1f}s; {len(by_canon)} entities have ≥1 mention.", flush=True)
 
     # Build one request per entity, skipping any whose output file already exists.
     requests = []
@@ -713,7 +785,11 @@ def submit_profiles(
         if mode == "fulldoc":
             requests.append(_build_request_fulldoc(entity, document, registry_text, chosen_model, cache_ttl))
         else:
-            request = _build_request_windowed(entity, paragraphs, registry, chosen_model, cache_ttl, neighbor_paras)
+            request_model = _choose_model(entity, chosen_model, chosen_minor_model)
+            request = _build_request_windowed(
+                entity, paragraphs, entity_by_canonical, mentions, by_canon,
+                request_model, cache_ttl, neighbor_paras,
+            )
             if request is None:
                 no_context += 1
                 print(f"WARNING: no document mentions found for {entity['canonical_name']!r} ({entity['type']}); skipping in windowed mode.")
@@ -725,10 +801,31 @@ def submit_profiles(
         print("Nothing to submit.")
         return ""
 
-    # Pre-flight cost estimate. Prompt for confirmation if above threshold.
-    estimate = estimate_anthropic_batch_cost(
-        requests, model=chosen_model, is_batch=True, cache_ttl=cache_ttl,
-    )
+    # Pre-flight cost estimate. Group by model so each tier is priced correctly,
+    # then sum. Each batch request carries its own params.model — no need to
+    # split the actual batch submission, just the cost calculation.
+    by_model_requests: Dict[str, list] = {}
+    for r in requests:
+        m = r["params"].get("model", chosen_model)
+        by_model_requests.setdefault(m, []).append(r)
+    per_model_estimates = {
+        m: estimate_anthropic_batch_cost(rs, model=m, is_batch=True, cache_ttl=cache_ttl)
+        for m, rs in by_model_requests.items()
+    }
+    # Combine into a single summary for confirm_proceed.
+    estimate = {
+        "n_requests": len(requests),
+        "uncached_input_tokens": sum(e.get("uncached_input_tokens", 0) for e in per_model_estimates.values()),
+        "cache_write_tokens": sum(e.get("cache_write_tokens", 0) for e in per_model_estimates.values()),
+        "cache_read_tokens": sum(e.get("cache_read_tokens", 0) for e in per_model_estimates.values()),
+        "output_tokens_estimate": sum(e.get("output_tokens_estimate", 0) for e in per_model_estimates.values()),
+        "cost_usd": sum((e.get("cost_usd") or 0) for e in per_model_estimates.values()),
+    }
+    # Per-tier breakdown for visibility (printed after the standard summary).
+    if len(per_model_estimates) > 1:
+        print("\n  Per-model breakdown:", flush=True)
+        for m, e in per_model_estimates.items():
+            print(f"    {m}: {e.get('n_requests', 0)} reqs, ${(e.get('cost_usd') or 0):.2f}", flush=True)
     if not confirm_proceed(estimate, f"pass-2 submit ({mode})", threshold_usd=cost_threshold_usd, auto_yes=auto_yes):
         print("Aborted by user.")
         return ""
@@ -738,12 +835,20 @@ def submit_profiles(
     print(f"Submitted batch: {batch.id}  status={batch.processing_status}  count={len(requests)}")
     # Log the estimate as informational only (cost_usd=None so it doesn't double-count
     # when collect logs actual spend).
+    by_model_counts = {m: len(rs) for m, rs in by_model_requests.items()}
     log_cost(
         f"pass2_submit_estimate ({mode})",
         chosen_model,
         cost_usd=None,
         is_batch=True,
-        details={"batch_id": batch.id, "n_requests": len(requests), "estimate_usd": estimate.get("cost_usd"), **{k: v for k, v in estimate.items() if k != "cost_usd"}},
+        details={
+            "batch_id": batch.id,
+            "n_requests": len(requests),
+            "estimate_usd": estimate.get("cost_usd"),
+            "by_model_n_requests": by_model_counts,
+            "by_model_estimates": {m: e.get("cost_usd") for m, e in per_model_estimates.items()},
+            **{k: v for k, v in estimate.items() if k not in ("cost_usd", "n_requests")},
+        },
     )
     return batch.id
 
@@ -784,6 +889,7 @@ def collect_profiles(
         time.sleep(60)
 
     written = 0
+    skipped_empty = 0
     drop_totals = {"self": 0, "unknown_target": 0, "quote_not_in_doc": 0, "malformed": 0}
     fuzzy_rescued_total = 0
     broken_link_totals = 0
@@ -791,6 +897,8 @@ def collect_profiles(
     total_cost = 0.0
     total_input = total_output = total_cache_write = total_cache_read = 0
     cost_model = None
+    # Per-model accumulators for the two-tier (Sonnet/Haiku) routing telemetry.
+    by_model: Dict[str, Dict[str, float]] = {}
 
     for result in client.messages.batches.results(batch_id):
         slug = result.custom_id
@@ -804,17 +912,31 @@ def collect_profiles(
             continue
 
         message = result.result.message
+        result_model = getattr(message, "model", None)
         if cost_model is None:
-            cost_model = getattr(message, "model", None)
+            cost_model = result_model
         usage = getattr(message, "usage", None)
         if usage is not None:
-            total_input += getattr(usage, "input_tokens", 0) or 0
-            total_output += getattr(usage, "output_tokens", 0) or 0
-            total_cache_write += getattr(usage, "cache_creation_input_tokens", 0) or 0
-            total_cache_read += getattr(usage, "cache_read_input_tokens", 0) or 0
-            cost = compute_anthropic_cost(usage, cost_model or "", is_batch=True, cache_ttl="1h")
+            in_tokens = getattr(usage, "input_tokens", 0) or 0
+            out_tokens = getattr(usage, "output_tokens", 0) or 0
+            cw_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
+            cr_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
+            total_input += in_tokens
+            total_output += out_tokens
+            total_cache_write += cw_tokens
+            total_cache_read += cr_tokens
+            cost = compute_anthropic_cost(usage, result_model or "", is_batch=True, cache_ttl="1h")
             if cost:
                 total_cost += cost
+            # Per-model breakdown.
+            mkey = result_model or "unknown"
+            slot = by_model.setdefault(mkey, {"n": 0, "input": 0, "output": 0, "cache_write": 0, "cache_read": 0, "cost": 0.0})
+            slot["n"] += 1
+            slot["input"] += in_tokens
+            slot["output"] += out_tokens
+            slot["cache_write"] += cw_tokens
+            slot["cache_read"] += cr_tokens
+            slot["cost"] += (cost or 0.0)
 
         tool_use = next(
             (b for b in message.content if b.type == "tool_use" and b.name == "submit_entity_profile"),
@@ -848,15 +970,29 @@ def collect_profiles(
         profile["description"] = cleaned_description
         broken_link_totals += len(broken)
 
+        # Drop windowing false positives: pass-1's mention index sometimes flags
+        # an entity in a doc where a generic alias matched (e.g. "City of the
+        # Dead" hitting an unrelated necropolis). The LLM correctly returns no
+        # source_pages and no relationships in that case — don't pollute the
+        # entity file with a "no mention here" stub section.
+        if not profile["source_pages"] and not profile["relationships"]:
+            skipped_empty += 1
+            continue
+
         supertype = supertype_map[entity["type"]]
         path = _output_path(output_dir, supertype, entity)
         _upsert_entity_file(path, entity, supertype, doc_tag, profile)
         written += 1
 
     print(f"\nWrote {written} entity files under {output_dir}")
+    print(f"Skipped {skipped_empty} empty profiles (windowing false positives)")
     print(f"Dropped relationships: self={drop_totals['self']}  unknown_target={drop_totals['unknown_target']}  quote_not_in_doc={drop_totals['quote_not_in_doc']}  malformed={drop_totals['malformed']}")
     print(f"Quotes rescued via fuzzy match: {fuzzy_rescued_total}")
     print(f"Stripped unresolved wikilinks in descriptions: {broken_link_totals}")
+    if len(by_model) > 1:
+        print("\nPer-model breakdown:", flush=True)
+        for m, s in by_model.items():
+            print(f"  {m}: {s['n']} reqs, in={s['input']}, out={s['output']}, cost=${s['cost']:.2f}", flush=True)
     if cost_model:
         # Guard against double-counting: if this batch_id was already billed
         # (typical when re-collecting an old batch via --start-from), don't log again.
@@ -877,6 +1013,7 @@ def collect_profiles(
                     "output_tokens": total_output,
                     "cache_write_tokens": total_cache_write,
                     "cache_read_tokens": total_cache_read,
+                    "by_model": by_model,
                 },
             )
             print(f"Batch cost: ${total_cost:.2f}  |  session total: ${session_total():.2f}", flush=True)
@@ -898,7 +1035,8 @@ if __name__ == "__main__":
     submit.add_argument("--output-dir", type=Path, required=True)
     submit.add_argument("--doc-tag", type=str, required=True, help="Doc tag for the per-source section in entity files; controls skip_existing logic.")
     submit.add_argument("--profile", type=Path, default=None, help="Optional corpus profile (used for OCR corrections).")
-    submit.add_argument("--model", type=str, default=None)
+    submit.add_argument("--model", type=str, default=None, help="Model for notable=True entities (factions, planes, major characters). Defaults to settings.extraction_model (Sonnet).")
+    submit.add_argument("--minor-model", type=str, default=None, help="Model for notable=False entities (windowed mode only). Defaults to claude-haiku-4-5-20251001 — about 3x cheaper than Sonnet. Set the same as --model to disable two-tier routing.")
     submit.add_argument("--cache-ttl", type=str, default="1h", choices=["5m", "1h"])
     submit.add_argument("--no-skip-existing", action="store_true", help="Re-submit entities even if output file exists.")
     submit.add_argument("--mode", type=str, default="fulldoc", choices=["fulldoc", "windowed"], help="fulldoc: cache the entire document per call (needs >200K context). windowed: per-entity paragraph windowing (fits any model).")
@@ -927,6 +1065,7 @@ if __name__ == "__main__":
             doc_tag=args.doc_tag,
             corpus_profile=corpus_profile,
             model=args.model,
+            minor_model=args.minor_model,
             cache_ttl=args.cache_ttl,
             skip_existing=not args.no_skip_existing,
             mode=args.mode,

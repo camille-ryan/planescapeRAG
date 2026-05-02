@@ -147,6 +147,8 @@ def run_pipeline(
     pass2_mode: str = "windowed",
     pass2_no_skip_existing: bool = False,
     pass2_cost_threshold_usd: float = 1.00,
+    pass2_model: Optional[str] = None,
+    pass2_minor_model: Optional[str] = None,
     auto_yes: bool = False,
     heuristic_top: int = 80,
     heuristic_min_count: int = 3,
@@ -311,6 +313,8 @@ def run_pipeline(
             output_dir=entities_dir,
             doc_tag=doc_tag,
             corpus_profile=profile,
+            model=pass2_model,
+            minor_model=pass2_minor_model,
             mode=pass2_mode,
             skip_existing=not pass2_no_skip_existing,
             cost_threshold_usd=pass2_cost_threshold_usd,
@@ -389,6 +393,8 @@ if __name__ == "__main__":
     parser.add_argument("--pass2-mode", type=str, default="windowed", choices=["fulldoc", "windowed"])
     parser.add_argument("--pass2-no-skip-existing", action="store_true", help="Re-profile entities even if their .md already exists. Use when the registry has expanded and you want refreshed wikilinks.")
     parser.add_argument("--pass2-cost-threshold", type=float, default=1.00, help="USD threshold above which the pass-2 submit prompts for confirmation.")
+    parser.add_argument("--pass2-model", type=str, default=None, help="Model for notable=True entities. Defaults to settings.extraction_model (Sonnet).")
+    parser.add_argument("--pass2-minor-model", type=str, default=None, help="Model for notable=False entities (windowed mode only). Defaults to claude-haiku-4-5-20251001 — about 3x cheaper than Sonnet. Set to the same value as --pass2-model to disable two-tier routing.")
     parser.add_argument("--yes", action="store_true", help="Skip cost-confirmation prompts (for unattended runs).")
     parser.add_argument("--heuristic-top", type=int, default=80)
     parser.add_argument("--heuristic-min-count", type=int, default=3)
@@ -422,6 +428,8 @@ if __name__ == "__main__":
         pass2_mode=args.pass2_mode,
         pass2_no_skip_existing=args.pass2_no_skip_existing,
         pass2_cost_threshold_usd=args.pass2_cost_threshold,
+        pass2_model=args.pass2_model,
+        pass2_minor_model=args.pass2_minor_model,
         auto_yes=args.yes,
         heuristic_top=args.heuristic_top,
         heuristic_min_count=args.heuristic_min_count,
