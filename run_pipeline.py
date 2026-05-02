@@ -168,7 +168,17 @@ def run_pipeline(
     work_dir = output_root / doc_tag
     work_dir.mkdir(parents=True, exist_ok=True)
     pdf_stem = pdf_path.stem.replace(" ", "_")
-    combined_md = work_dir / f"{pdf_stem}_combined.md"
+    # OCR'd markdown lives outside tmp/ so it survives tmp cleanups and is
+    # editable as canonical source. Path is `<project>/ocr/<doc_tag>.md`.
+    ocr_dir = graph_root.parent / "ocr"
+    combined_md = ocr_dir / f"{doc_tag}.md"
+    legacy_combined_md = work_dir / f"{pdf_stem}_combined.md"
+    if not combined_md.exists() and legacy_combined_md.exists():
+        # One-time migration on read: if a previous run wrote to the old
+        # location (legacy tmp/<tag>/<stem>_combined.md), copy it forward.
+        ocr_dir.mkdir(parents=True, exist_ok=True)
+        combined_md.write_bytes(legacy_combined_md.read_bytes())
+        print(f"  migrated OCR'd text: {legacy_combined_md} → {combined_md}", flush=True)
     per_doc_registry = work_dir / "registry.json"
     pass2_batch_file = work_dir / "pass2_batch_id.txt"
     sweep_path = work_dir / "sweep_suggestions.json"
@@ -189,7 +199,10 @@ def run_pipeline(
     if start_idx <= 0 <= stop_idx:
         _stage_header(1, total, "OCR + combine")
         t0 = time.time()
-        submit_chunked(pdf_path=pdf_path, output_dir=work_dir, profile=profile, chunk_size=chunk_size)
+        submit_chunked(
+            pdf_path=pdf_path, output_dir=work_dir, profile=profile,
+            chunk_size=chunk_size, combined_md_path=combined_md,
+        )
         if not combined_md.exists():
             raise FileNotFoundError(f"Expected combined markdown at {combined_md} after OCR stage")
         print(f"  done ({time.time() - t0:.0f}s)", flush=True)

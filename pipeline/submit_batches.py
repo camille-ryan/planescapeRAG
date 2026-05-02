@@ -30,6 +30,7 @@ def submit_chunked(
     chunk_size: int = 50,
     page_start: int = 1,
     page_end: Optional[int] = None,
+    combined_md_path: Optional[Path] = None,
 ) -> Path:
     settings = Settings()
     ocr = OpenAIOCR(settings)
@@ -100,7 +101,10 @@ def submit_chunked(
             out.write(rp.read_bytes())
     print(f"\nCombined JSONL: {combined_jsonl}", flush=True)
 
-    md_path = output_dir / f"{stem}_combined.md"
+    # `combined_md_path` is the explicit destination from the orchestrator.
+    # Fallback to the legacy in-tmp location for direct CLI use.
+    md_path = combined_md_path if combined_md_path is not None else output_dir / f"{stem}_combined.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
     combine_batch_results(combined_jsonl, md_path)
     return md_path
 
