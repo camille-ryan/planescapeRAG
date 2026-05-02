@@ -13,3 +13,4 @@ Pillow
 jinja2
 markdown
 python-multipart
+pyyaml

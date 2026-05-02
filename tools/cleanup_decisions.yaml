@@ -1,0 +1,135 @@
+# Manual cleanup decisions for the entity registry.
+#
+# Pre-populated with my best-guess merges from the duplicate-pair scans.
+# Edit before running:
+#   - To change a winner: swap the names in `winner` and `losers`.
+#   - To skip a merge: comment it out (prefix lines with #) or move to `keeps`.
+#   - To add a merge: append to `merges`.
+#
+# Apply with:
+#   python -m planescapeRAG.tools.apply_decisions
+#
+# After applying, refresh entity files and chatbot metadata:
+#   python -m planescapeRAG.tools.refresh_entity_frontmatter
+#   python -m planescapeRAG.chatbot.embed_entities --force-refresh --yes
+
+
+# Type changes are applied first so cross-type merges below can succeed.
+type_changes:
+  - canonical: "spell key"            # was 'item' — should be 'concept' to merge with 'Spell Keys'
+    type: concept
+  - canonical: "True Name"            # was 'item' — same situation
+    type: concept
+  - canonical: "Hopeful"              # was 'faction' — same dustmen sect as 'Hopefuls' (concept)
+    type: concept
+
+
+merges:
+  # ── Article variants (the X / X) ────────────────────────────────────────
+  - winner: The Beastlands
+    losers: [Beastlands]
+  - winner: The Spire
+    losers: [Spire]
+
+  # ── Punctuation / spacing ───────────────────────────────────────────────
+  - winner: Petitioners' Square
+    losers: ["Petitioner's Square"]
+  - winner: Shifters' Manacles
+    losers: ["Shifter's manacles"]
+  - winner: Traveler's Way
+    losers: ["travelers' way"]
+  - winner: Viper Tree
+    losers: [Vipertree]
+
+  # ── Plurals / morphological variants ────────────────────────────────────
+  - winner: arcanaloth
+    losers: [arcanaloths]
+  - winner: Asura
+    losers: [asuras]
+  - winner: Hecatoncheire
+    losers: [Hecatoncheires]
+  - winner: nycaloth
+    losers: [nycaloths]
+  - winner: slaad
+    losers: [Slaadi]
+  - winner: color pool
+    losers: [Color Pools]
+  - winner: Black Sail
+    losers: [Black Sails]
+
+  # ── Cross-type (work after type_changes above) ──────────────────────────
+  - winner: Spell Keys
+    losers: ["spell key"]
+  - winner: True Names
+    losers: ["True Name"]
+  - winner: Hopefuls
+    losers: [Hopeful]
+
+  # ── OCR / typo variants ─────────────────────────────────────────────────
+  - winner: Lzuli Clearface
+    losers: [Lzuli Clearfacet]
+  - winner: Dreamhearth
+    losers: [Dreamheart]
+  - winner: Triboro
+    losers: [Triborove]
+
+  # ── Case-only variants for category types (also caught by merge_case_variants tool) ──
+  # Listed here too so this single file is the source of truth. Idempotent —
+  # if merge_case_variants already ran, these are no-ops.
+  - winner: alu-fiend          # change to 'Alu-fiend' if you prefer capitalized
+    losers: [Alu-fiend]
+  - winner: Astral streaker    # change to 'Astral Streaker' if preferred
+    losers: [Astral Streaker]
+  - winner: Baku
+    losers: [baku]
+  - winner: Bladeling
+    losers: [bladeling]
+  - winner: chasme             # change to 'Chasme' if preferred
+    losers: [Chasme]
+  - winner: Chronolily
+    losers: [chronolily]
+  - winner: Cornugon
+    losers: [cornugon]
+  - winner: guardinals         # change to 'Guardinals' if preferred
+    losers: [Guardinals]
+  - winner: Hollyphant
+    losers: [hollyphant]
+  - winner: mortai             # change to 'Mortai' if preferred
+    losers: [Mortai]
+  - winner: Vargouille
+    losers: [vargouille]
+
+
+# Reviewed and intentionally kept separate. No action — for audit / future-self reference.
+keeps:
+  # Different planes / contexts
+  - [The Ghetto, Ghetto]                       # Abellio vs Arcadia
+  - [Tome of Magic, The Tome of Magic]         # Sourcebook vs Sigil shop
+  - [Unity of Rings, Unity-of-Rings]           # Concept vs deva named after it
+  - [fire shadow, shadow fire]                 # Different creatures, different planes
+  - [Unit 822, Unit 437]                       # Different Logicus units
+
+  # Different deities / pantheons
+  - [Frey, Freya]
+  - [Hel, Held]
+  - [Hel, Helm]                                # Norse Hel vs Forgotten Realms Helm
+  - [Set, Setus]                               # Egyptian power vs tiefling boy
+  - [Shar, Shards]                             # Faerûnian power vs Selune servitors
+  - [Silvanus, Silvan]                         # Celtic power vs druid proxy
+  - [Titania, titan]                           # Faerie queen vs giant creature
+
+  # Different characters / locations
+  - [Kayle, Kaylef]                            # half-elf vs dwarf
+  - [Lethe, Lethea]                            # river vs wemic NPC
+  - [Mercuria, mercurial]                      # plane layer vs creature
+  - [Shade, shad]                              # Demiplane of Shadow native vs Plane of Earth race
+  - [Diakka, diakk]                            # both Gray Waste creatures — possibly same; keep pending review
+  - [Guardians, Guardian]                      # sect vs sword
+  - [titan, Titans]                            # creature vs Olympian prisoners (probably keep)
+  - [Chance, Chan]                             # NPC barmy vs Princess of Air
+  - [Felliz, Fell]                             # planewalker vs dabus
+  - [Gazra, Gaz]                               # ash empire leader vs tiefling tax-collector
+  - [Hivers, Hive]                             # demonym vs ward — could merge as alias; review
+  - [kytonia, Kyton]                           # possibly same; descriptions don't quite match
+  - [Memedi, Meme]                             # different creatures
+  - [Rigus, Rig]                               # gate-town vs tiefling
