@@ -1,0 +1,193 @@
+# Predicate vocabulary for typed graph extraction.
+#
+# How this is used: the pass-2 extraction prompt will list these predicates as
+# the closed vocabulary. For each relationship the LLM extracts, it picks the
+# best-fitting closed predicate, OR emits `predicate: <free-text>` when none
+# fits. Open predicates remain useful for narrative richness; the closed ones
+# are the queryable spine.
+#
+# Naming convention:
+#   - Roles use <NOUN>_OF: MEMBER_OF, LEADER_OF, RULER_OF, WORSHIPPER_OF, PROXY_OF
+#   - Spatial uses prepositions: LOCATED_IN, PORTAL_TO, BASED_AT
+#
+# Toggle `include: true/false` to set the final closed vocabulary.
+#
+# Structure per entry:
+#   name: GRAPH_DB_STYLE_UPPER (becomes the relationship type in Cypher)
+#   include: bool
+#   direction: who → whom (the LLM must orient edges this way)
+#   transitive: whether `MATCH (a)-[:X*]->(b)` makes sense
+#   typical_source_types / target_types: which entity-type frontmatter values
+#       should usually appear on each side (extraction hint, not a hard filter)
+#   description: one-line semantic
+#   example_quote: from corpus, to anchor the LLM
+#   corpus_evidence: rough volume from heuristic scan; real number is higher
+#       once an LLM does the classification with explicit guidance
+
+predicates:
+
+  # ---- Spatial ----
+
+  - name: LOCATED_IN
+    include: true
+    direction: child → parent
+    transitive: true
+    typical_source_types: [place, plane]
+    typical_target_types: [place, plane]
+    description: Structural spatial containment. Building inside ward inside city inside plane; layer inside outer plane.
+    example_quote: "Not all that long ago, the Hardheads lost an entire layer of Arcadia to Mechanus..."
+    corpus_evidence: ~3900 quotes (LOCATED_IN + LAYER_OF buckets combined, 7.3%)
+    notes: |
+      Layers are folded in here — a layer of Baator IS structurally located in
+      Baator. Use `MATCH (x)-[:LOCATED_IN*]->(:Place {name:'Sigil'})` to get
+      every fixed entity inside Sigil regardless of nesting depth. This fixes
+      the "taverns in Sigil missed via wards" retrieval bug.
+
+      DO NOT use LOCATED_IN for characters or transient associations. A
+      character who frequents a tavern is not LOCATED_IN it. Use BASED_AT
+      for a stable home/residence; let "frequents" / "appears in" stay open.
+
+  - name: PORTAL_TO
+    include: true
+    direction: from → to
+    transitive: false
+    typical_source_types: [place, plane]
+    typical_target_types: [place, plane]
+    description: Portal or gateway connecting two locations. Often planar.
+    example_quote: "the portal to the Outlands lies behind a marketplace stall"
+    corpus_evidence: ~950 quotes (1.8%)
+    notes: |
+      Most Sigil portals are bidirectional in lore but extracted directionally
+      from a quote's framing. Query both directions for "what connects to X".
+
+  - name: BASED_AT
+    include: true
+    direction: entity → location
+    transitive: false
+    typical_source_types: [character, faction]
+    typical_target_types: [place, plane]
+    description: Stable home, residence, or headquarters. Single primary location.
+    example_quote: "the Harmonium has its headquarters at the City Barracks"
+    corpus_evidence: not directly counted; covers character residences + faction HQs
+    notes: |
+      Covers both "this character lives here" and "this faction is headquartered
+      here". Non-transitive — if you want "what plane is the Harmonium HQ on",
+      chain via the target's outgoing LOCATED_IN edges.
+
+  # ---- Organizational ----
+
+  - name: MEMBER_OF
+    include: true
+    direction: member → group
+    transitive: false
+    typical_source_types: [character, creature]
+    typical_target_types: [faction]
+    description: Character/being belongs to a faction or organization.
+    example_quote: "Razor Jack [Pl/6 tiefling/F4/Harmonium/LE]"
+    corpus_evidence: ~1650 quotes (3.1%)
+    notes: |
+      The "named members of Harmonium" debug case becomes
+      `MATCH (c)-[:MEMBER_OF]->(:Faction {name:'Harmonium'}) RETURN c.name`
+      — exhaustive instead of bounded by retrieval slider.
+
+  - name: LEADER_OF
+    include: true
+    direction: leader → organization
+    transitive: false
+    typical_source_types: [character]
+    typical_target_types: [faction]
+    description: Character leads a faction. Factol, head, chief.
+    example_quote: "Sarin, factol of the Harmonium"
+    corpus_evidence: ~470 quotes (0.9%)
+    notes: |
+      Distinct from RULER_OF — LEADER_OF is for organizations, RULER_OF is
+      for domains/realms. Sarin leads the Harmonium; Bel rules Avernus.
+
+  # ---- Power ----
+
+  - name: RULER_OF
+    include: true
+    direction: ruler → domain
+    transitive: false
+    typical_source_types: [character, creature]
+    typical_target_types: [place, plane]
+    description: A being holds clear sovereignty over a place or realm.
+    example_quote: "Bel rules Avernus from his iron tower"
+    corpus_evidence: ~115 quotes (0.2%)
+    notes: |
+      Reserve for clear sovereignty (archdevils, gods of realms, etc.). The
+      Lady of Pain is NOT a RULER_OF Sigil in any conventional sense — she
+      presides over the city but does not govern. Leave Lady↔Sigil in prose.
+
+      Edges always oriented (ruler)-[:RULER_OF]->(domain), even when the
+      source quote is phrased as "X is ruled by Y" — orient by semantics,
+      not sentence subject.
+
+  - name: WORSHIPPER_OF
+    include: true
+    direction: worshipper → power
+    transitive: false
+    typical_source_types: [character, creature, faction]
+    typical_target_types: [character, plane, concept]
+    description: A being or group venerates a deity or cosmic power.
+    example_quote: "the worshippers of Asmodeus gather in the Lower Ward"
+    corpus_evidence: ~300 quotes (0.6%)
+    notes: |
+      Powers in Planescape are often modeled as characters in the registry,
+      so target type is mixed. Worth keeping closed because "who worships X"
+      is a natural query.
+
+  - name: PROXY_OF
+    include: true
+    direction: proxy → power
+    transitive: false
+    typical_source_types: [character]
+    typical_target_types: [character]
+    description: A chosen agent acting on behalf of a power/deity. Planescape-specific role.
+    example_quote: "the proxy of Anubis serves on the Astral"
+    corpus_evidence: low volume but high semantic specificity
+    notes: |
+      Distinct from WORSHIPPER_OF — a proxy is a sanctioned agent, not just a
+      devotee. Both edges may exist for the same character.
+
+  # ---- Politics (toggleable — see header for rationale) ----
+
+  - name: OPPOSES
+    include: false   # flip to true if politics queries matter
+    direction: a → b   # query both directions, semantically symmetric
+    transitive: false
+    typical_source_types: [faction, character, creature]
+    typical_target_types: [faction, character, creature]
+    description: Active antagonism — faction rivalry, personal feud, blood war.
+    example_quote: "The Harmonium doesn't see things this way."
+    corpus_evidence: ~380 quotes (0.7%)
+
+  - name: ALLIED_WITH
+    include: false   # flip to true alongside OPPOSES if you want both
+    direction: a → b   # query both directions, semantically symmetric
+    transitive: false
+    typical_source_types: [faction, character, creature]
+    typical_target_types: [faction, character, creature]
+    description: Active alliance between entities.
+    example_quote: "The Mathematicians are loosely allied with the Guvners"
+    corpus_evidence: ~75 quotes (0.1%)
+
+# ---- Predicates intentionally NOT included ----
+#
+# These appeared in the scan but were judged better-served as open or in-prose:
+#
+#   founded   (~170 quotes): low volume, narrative; capture as open if needed
+#   killed    (~360 quotes): a narrative event, not a stable relationship
+#   created_by (~55 quotes): too rare to justify a closed predicate
+#   visits / encountered / studied_at / betrayed / frequents:
+#     long tail of narrative verbs — keep open. Promote to closed only if a
+#     single predicate appears in >100 quotes AND has obvious query value.
+
+# ---- Open predicates ----
+#
+# The LLM is told: "If no closed predicate above fits, emit
+# `predicate: <snake_case_verb>` with a free-text label." Open predicates stay
+# queryable in Neo4j (`MATCH (a)-[r]->(b) WHERE type(r) = 'CREATED_BY'`), they
+# just don't have schema-level semantics. Plan to review the open-predicate
+# distribution after first pass-2 run with the new schema; promote any that
+# emerge above ~100 occurrences with clear semantics.
