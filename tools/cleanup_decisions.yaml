@@ -40,6 +40,8 @@ merges:
     losers: ["travelers' way"]
   - winner: Viper Tree
     losers: [Vipertree]
+  - winner: Administrators' District          # plural-possessive precedent (cf. Petitioners' Square)
+    losers: ["Administrator's District"]
 
   # ── Plurals / morphological variants ────────────────────────────────────
   - winner: arcanaloth
@@ -66,38 +68,54 @@ merges:
     losers: [Hopeful]
 
   # ── OCR / typo variants ─────────────────────────────────────────────────
-  - winner: Lzuli Clearface
-    losers: [Lzuli Clearfacet]
+  - winner: Lzuli Clearfacet
+    losers: [Lzuli Clearface]
   - winner: Dreamhearth
     losers: [Dreamheart]
-  - winner: Triboro
-    losers: [Triborove]
+  - winner: Triborove
+    losers: [Triboro]
 
   # ── Case-only variants for category types (also caught by merge_case_variants tool) ──
   # Listed here too so this single file is the source of truth. Idempotent —
   # if merge_case_variants already ran, these are no-ops.
-  - winner: alu-fiend          # change to 'Alu-fiend' if you prefer capitalized
-    losers: [Alu-fiend]
-  - winner: Astral streaker    # change to 'Astral Streaker' if preferred
-    losers: [Astral Streaker]
+  - winner: Alu-fiend          # change to 'Alu-fiend' if you prefer capitalized
+    losers: [alu-fiend]
+  - winner: Astral Streaker    # change to 'Astral Streaker' if preferred
+    losers: [Astral streaker]
   - winner: Baku
     losers: [baku]
   - winner: Bladeling
     losers: [bladeling]
-  - winner: chasme             # change to 'Chasme' if preferred
-    losers: [Chasme]
+  - winner: Chasme             # change to 'Chasme' if preferred
+    losers: [chasme]
   - winner: Chronolily
     losers: [chronolily]
   - winner: Cornugon
     losers: [cornugon]
-  - winner: guardinals         # change to 'Guardinals' if preferred
-    losers: [Guardinals]
+  - winner: Guardinals         # change to 'Guardinals' if preferred
+    losers: [guardinals]
   - winner: Hollyphant
     losers: [hollyphant]
-  - winner: mortai             # change to 'Mortai' if preferred
-    losers: [Mortai]
+  - winner: Mortai             # change to 'Mortai' if preferred
+    losers: [mortai]
   - winner: Vargouille
     losers: [vargouille]
+  - winner: Avariel
+    losers: [avariel]
+  - winner: Incantifier
+    losers: [incantifier]
+  - winner: Surelock
+    losers: [surelock]
+  - winner: Spiritbowl
+    losers: [spiritbowl]
+  - winner: Sphere of Survival
+    losers: [sphere of survival]
+  - winner: Ether Cyclone
+    losers: [ether cyclone]
+  - winner: Sess'innek
+    losers: ["Sess'Innek"]
+  - winner: Daern's Instant Fortress
+    losers: ["Daern's instant fortress"]
 
   # ── OCR phantom: 'kytonia' is a single-instance mis-OCR of 'yugoloths' ──
   # in in_the_cage. The bad text was fixed in ocr/in_the_cage.md; the registry
@@ -107,13 +125,391 @@ merges:
   - winner: yugoloth
     losers: [kytonia]
 
+  # ── Wave 1A: typo merges (winner = higher-count or correct standard spelling) ──
+  - winner: Plain of Infinite Portals
+    losers: [Plains of Infinite Portals]
+  - winner: Molydeus
+    losers: [Molydei]
+  - winner: Tefnut
+    losers: [Tephnut]
+  - winner: Ogremoch
+    losers: [Ogremach]
+  - winner: Great Bazaar
+    losers: [Grand Bazaar]
+  - winner: Blibdoolpoolp
+    losers: [Blipdoolpoolp]
+  - winner: Mountain of Woe
+    losers: [Wountain of Woe]
+  - winner: Demon of the Bells
+    losers: [Dnemi of the Bells]
+  - winner: Ehkahk
+    losers: [Ekhakh]
+  - winner: Argathorn
+    losers: [Arathagon]
+  - winner: Guardian of the Dead Gods
+    losers: [Guardian of Dead Gods]
+  - winner: Hippogriff
+    losers: [Hippogryph]
+  - winner: Zaebos
+    losers: [Zexion]
+  - winner: Malsheem
+    losers: [Malshene]
+
+  # ── Wave 1B: low-count typo merges + a 4-way yugoloth boatmen merge ──
+  - winner: Marraenoloths           # then renamed to 'Marraenoloth' below (propcase singular)
+    losers: [marranoloth, Marenoloths, Maranoloths]
+  - winner: Devland
+    losers: [Deyland]
+  - winner: Pereid
+    losers: [Perfid]
+  - winner: Arcadeon Russetmane
+    losers: [Arcadeon Roussetmane]
+  - winner: Amill Facolas
+    losers: [Amil Facolas]
+  - winner: Elloweth Theater
+    losers: [Ellioweath Theater]
+  - winner: Kagorius
+    losers: [Kuggoris]
+  - winner: Nicolai Mabru
+    losers: [Nikolas]
+  - winner: Mowatt Ke'Mahn          # Faces of Evil + Hellbound describe the same lupinal; 'Mouvet' is OCR drift
+    losers: ["Mouvet Mc'Kanan"]
+
+  # ── Wave 1B: plural variants in inner_planes (then case-renamed below) ──
+  - winner: facet                   # then renamed to 'Facet'
+    losers: [facets]
+  - winner: wavefire                # then renamed to 'Wavefire'
+    losers: [wavefires]
+
+  # ── Wave 1C: Factol-vs-bare-name merges (Factol X wins; bare name becomes alias) ──
+  - winner: Factol Pentar
+    losers: [Pentar]
+  - winner: Factol Hashkar
+    losers: [Hashkar]
+  - winner: Factol Rhys
+    losers: [Rhys]
+  - winner: Factol Sarin
+    losers: [Sarin]
+  - winner: Factol Terrance
+    losers: [Terrance]
+  - winner: Factol Lhar
+    losers: [Lhar]
+  - winner: Factol Karan
+    losers: [Karan]
+  - winner: Factol Darius
+    losers: [Darius]
+  - winner: Factol Mallin
+    losers: [Mallin]
+  - winner: Factol Skall
+    losers: [Skall]
+
+  # ── Wave 1C: Factol three-ways and full-name preferences ─────────────────
+  - winner: Erin Darkflame Montgomery       # full real name; Erin Montgomery and Factol Montgomery become aliases
+    losers: [Erin Montgomery, Factol Montgomery]
+  - winner: Ambar Vergrove                  # full real name
+    losers: [Ambar, Factol Ambar]
+  - winner: Alisohn Nilesia                 # full real name
+    losers: [Factol Nilesia]
+
+  # ── Wave 2A: Faction synonym merges (formal name wins; slang demonym becomes alias) ──
+  - winner: Bleak Cabal
+    losers: [Bleakers]
+  - winner: Free League
+    losers: [Indeps]
+  - winner: Revolutionary League
+    losers: [Anarchists]
+  - winner: Transcendent Order
+    losers: [Ciphers]
+  - winner: Fraternity of Order
+    losers: [Guvners]
+
+  # ── Wave 2A: misc duplicate (pass-1 created two entries from one source) ──
+  - winner: Dusty Wig                       # 5 doc occurrences; 'Dub's Wing' is OCR drift, 0 occurrences
+    losers: ["Dub's Wing"]
+
+  # ── Wave 2B: elemental plane synonyms (formal 'Elemental Plane of X' wins) ──
+  - winner: Elemental Plane of Air
+    losers: [Plane of Air]
+  - winner: Elemental Plane of Earth
+    losers: [Plane of Earth]
+  - winner: Elemental Plane of Fire
+    losers: [Plane of Fire]
+  - winner: Elemental Plane of Water
+    losers: [Plane of Water]
+
+  # ── Wave 2B: river name merges (full 'River X' wins) ──
+  - winner: River Styx
+    losers: [Styx]
+  - winner: River Oceanus
+    losers: [Oceanus]
+
+  # ── Wave 2 misc: Diakk merge (Diakka is plural) ──
+  # 'diakk' is the existing canonical (lowercase singular); 'Diakka' is the
+  # plural form. Merge first, then renamed to propcase 'Diakk' below.
+  - winner: diakk
+    losers: [Diakka]
+
+  # ── Wave 3A: substring/epithet merges (same entity under longer/shorter name) ──
+  - winner: Duke Rowan Darkwood             # both describe Factol of the Fated; Duke is the title
+    losers: [Rowan Darkwood]
+  - winner: Sigil's Prison                  # 'Prison' is the same place under generic name
+    losers: [Prison]
+  - winner: Hive Ward                       # 'Hive' refers to the ward
+    losers: [Hive]
+  # 'Suicide of the Clueless' deleted (pass-1 hallucination, 0 doc occurrences) — see entity_deletions below.
+  - winner: Citadel of Mephistar            # 'Mephistar' here describes the same citadel (the Cania layer is a separate concept; not in registry)
+    losers: [Mephistar]
+  - winner: Gatehouse Night Market          # 'Night Market' = the same place
+    losers: [Night Market]
+  - winner: Berronar Truesilver             # full proper name
+    losers: [Berronar]
+  - winner: Shemeshka the Marauder          # full proper name; 'Shemeshka' is a stub ('See Shemeshka the Marauder')
+    losers: [Shemeshka]
+  - winner: Great Library of Sigil          # full name
+    losers: [Great Library]
+  - winner: Sword of the Planes             # propercase canonical
+    losers: [long sword of the planes]
+  - winner: Queen Vlaakith CLVII            # specific lich-queen (CLVII = the 157th)
+    losers: [Vlaakith]
+  - winner: Great Modron March              # formal event name
+    losers: [Modron March]
+  - winner: Bilfar the Diver                # full epithet
+    losers: [Bilfar]
+  - winner: Dows Wing boarding house        # full name
+    losers: [Dows Wing]
+  - winner: Astral Warriors Guild           # full name
+    losers: [Astral Warriors]
+  - winner: Demiplane of Moil               # formal plane name
+    losers: [Moil]
+  - winner: Tairish Crasad                  # full proper name; 'Tairish' has identical description
+    losers: [Tairish]
+
+  # ── Wave 3B: 'other 2-way' — same entity under different name ──
+  - winner: Thoth's Estate                  # Thebestys is the city in Thoth's Estate (same realm)
+    losers: [Thebestys]
+  - winner: The Converts                    # 'Limbo's Converts' is the same Chameleon sect
+    losers: [Limbo's Converts]
+  - winner: Seldarine                       # 'Elvish Pantheon' is the same collective
+    losers: [Elvish Pantheon]
+  - winner: Ygrax the Skullbiter            # same Ygrax under two epithets
+    losers: [Ygrax the Ulsbreaker]
+  - winner: River of Salt                   # 'Ring of Salt' = same crystalline river in Azzagrat
+    losers: [Ring of Salt]
+  - winner: Bezekira                        # formal creature name; 'hellcat' is colloquial
+    losers: [hellcat]
+  - winner: Argentil                        # proper name; 'Selûne's Palace' is descriptive
+    losers: ["Selûne's Palace"]
+  # Deva is a subtype of Aasimon, not the same — kept separate. The wrong
+  # 'Aasimon' alias on Deva is removed below in alias_removals.
+  - winner: Avariel                         # 'al karak elam' = same winged-elf race under another name
+    losers: [al karak elam]
+  - winner: Orcus                           # Tenebrous = Orcus reborn; same entity
+    losers: [Tenebrous]
+  - winner: Expansionists                   # = 'Expansionist faction'
+    losers: [Expansionist faction]
+  # 'Jakke's Place' deleted (pass-1 hallucination, 0 doc occurrences) — see entity_deletions below.
+  # Quake's Place is the real tavern, kept as-is.
+  - winner: Anubis                          # 'Guardian of the Dead Gods' = current role of Anubis
+    losers: [Guardian of the Dead Gods]
+  - winner: Jemorille the Exile             # Colcook is Jemorille's disguise
+    losers: [Colcook]
+  - winner: Incanterium                     # 3-way merge; all describe the same magic-eating faction
+    losers: [Incantifier, Incantifers]
+  - winner: Demiplane of Moil               # 'City That Waits' = same demiplane
+    losers: [City That Waits]
+  - winner: Acererak                        # Devourer description: '(also a prime lich known as Acererak)'
+    losers: [Devourer]
+  - winner: Gremthit Mib                    # Gremmith Mi = OCR variant of same wizard-assassin
+    losers: [Gremmith Mi]
+  - winner: proxy                           # 'Proxies' describes the same; merging into existing canonical, then rename to 'Proxy' below
+    losers: [Proxies]
+
+  # ── Wave 4: multi-way collisions ──
+  # Yarmoril: 3 entities all describing Plague-Mort's Arch-Lector under different OCR spellings.
+  # Source-doc count: Byrri Yarmoril 3, others 1 each → renamed to Byrri Yarmoril below.
+  - winner: Plague-Mort Arch-Lector
+    losers: [Byrris Yarmoril, Byrrl Yarmoril]
+  # Hounds (faction) and Hounds of Plague-Mort describe the same militia.
+  - winner: Hounds of Plague-Mort
+    losers: [Hounds]
+
+  # ── Wave 6: OCR-error duplicates ──
+  # Hamin is an OCR error for Hanim (the demiplane-of-Maelost humans). Both entities
+  # extracted from infinite_staircase pages 45-56. Hanim is more comprehensive
+  # (10 pages vs 2) and already covers Hamin's content (Valgoss symbiosis, Iron Shadow).
+  - winner: Hanim
+    losers: [Hamin]
+
+
+# Bogus entities to delete outright (pass-1 hallucinations etc.)
+entity_deletions:
+  # 'Spray' is a pass-1 hallucination from the spell name 'color spray' in
+  # faction_war.md (case-insensitive regex matched 'spray' inside 'color spray').
+  # Description was generated assuming Spray is a character; the actual
+  # character at the Armory is Spragg. Deleting rather than merging so 'Spray'
+  # doesn't become a (false) alias of Spragg.
+  - "Spray"
+  # 0 doc occurrences across all OCR; Clueless is the real concept entity.
+  - "Suicide of the Clueless"
+  # 0 doc occurrences across all OCR; Quake's Place is the real tavern (Quake Lavender's).
+  - "Jakke's Place"
+  # OCR artifact: the digit '8' picked up from stat blocks (HD 8, F8, etc.) became
+  # an "entity". Cross-references in 27 docs are all coincidental substring hits;
+  # no real character. Detected via tools/find_degenerate_entities.py.
+  - "8"
+
+
+# Canonical renames. Old name auto-added to aliases so document scans still hit it.
+canonical_renames:
+  # Make creature-type plural canonicals into propcase singular (Camille's preference).
+  - from: "Marraenoloths"
+    to: "Marraenoloth"
+  - from: "facet"
+    to: "Facet"
+  - from: "wavefire"
+    to: "Wavefire"
+  - from: "diakk"
+    to: "Diakk"
+  - from: "proxy"
+    to: "Proxy"
+  - from: "Plague-Mort Arch-Lector"          # rename merged entity to its most-used OCR spelling
+    to: "Byrri Yarmoril"
+
+
+# Specific aliases to remove from an entity (use for wrong/bogus aliases that
+# shouldn't trigger windowing for this entity).
+alias_removals:
+  # ── Wave 2A: aliases that shouldn't be aliases ──
+  - canonical: "Guardians"                   # creature 'Caretaker' is separate; both share 'Caretakers' alias
+    alias: "Caretakers"
+  - canonical: "Fated"                       # 'Heartless Hall' is the Fated's HQ ('Rowan's Hall'), separate place entity
+    alias: "Heartless Hall"
+  - canonical: "Mercykillers"                # 'Sons of Mercy' is the pre-Upheaval predecessor faction, separate entity
+    alias: "Sons of Mercy"
+
+  # ── Wave 2B: Hades cluster — Hades (deity), Underworld (Pluton location),
+  #            Pluton (Gray Waste layer), Gray Waste (plane) are all separate ──
+  - canonical: "Gray Waste"                  # Hades is the Greek deity entity, not a name for the plane
+    alias: "Hades"
+  - canonical: "Hades"                       # Underworld is its own entity (Hades' realm in Pluton)
+    alias: "Underworld"
+  - canonical: "Underworld"                  # Pluton is its own entity (the Gray Waste layer)
+    alias: "Pluton"
+  - canonical: "Ysgard"                      # Gladsheim is Odin's hall in Asgard, separate place
+    alias: "Gladsheim"
+
+  # ── Wave 2C: layer-vs-plane (each layer is its own entity) ──
+  - canonical: "The Beastlands"
+    alias: "Krigala"
+  - canonical: "Acheron"
+    alias: "Avalas"
+  - canonical: "Acheron"                     # Battleplains has no separate entity, but the alias collides w/ Avalas
+    alias: "Battleplains"
+  - canonical: "Gehenna"
+    alias: "Khalas"
+  - canonical: "Gray Waste"
+    alias: "Oinos"
+  - canonical: "Mechanus"
+    alias: "Regulus"
+  - canonical: "Baator"                      # Lords of the Nine are the rulers, not the plane
+    alias: "Lords of the Nine"
+  - canonical: "The Abyss"
+    alias: "Plain of Infinite Portals"
+  - canonical: "Sigil"                       # Cagers are the residents (separate entity)
+    alias: "Cagers"
+
+  # ── Wave 2D: Ethereal regions are separate sub-entities ──
+  - canonical: "Ethereal Plane"
+    alias: "Border Ethereal"
+  - canonical: "Ethereal Plane"
+    alias: "Deep Ethereal"
+
+  # ── Wave 3A: false aliases on substring pairs (different entities sharing a fragment) ──
+  - canonical: "nic'Epona"                   # Epona is the goddess; nic'Epona are her descendant horses
+    alias: "Epona"
+  - canonical: "Erin Darkflame Montgomery"   # 'Montgomery' alone is a different mage at Castle at the Edge of Time
+    alias: "Montgomery"
+  - canonical: "Foundry"                     # Great Foundry is a different building (Believers HQ vs Doomguard landmark)
+    alias: "Great Foundry"
+  - canonical: "Tonat Shar"                  # Shar is the Faerûnian power; Tonat Shar is a Harmonium lieutenant
+    alias: "Shar"
+  - canonical: "Zess' Forge"                 # Zess is the modron operator; the Forge is a separate place entity
+    alias: "Zess"
+  - canonical: "Logicus"                     # Logicus is the prime world; Logicus Prime is the modron ruler
+    alias: "Logicus Prime"
+
+  # ── Wave 3A follow-up: clean Tower-of-the-Wyrm alias absorbed by Sigil's Prison merge ──
+  - canonical: "Sigil's Prison"              # different Mercykiller place; came in via the 'Prison' merge
+    alias: "Tower of the Wyrm"
+
+  # ── Wave 3B: false aliases on 'other 2-way' (different entities, similar names or shared keywords) ──
+  - canonical: "Arborea"                     # Arvandor is a realm IN Arborea, separate place entity
+    alias: "Arvandor"
+  - canonical: "Cant"                        # Planar Common is the trade language, distinct from cant/slang
+    alias: "Planar Common"
+  - canonical: "Power Keys"                  # Greater Power Key is a specific subtype, separate concept entity
+    alias: "greater power key"
+  - canonical: "githyanki"                   # Gish is the multiclass subset, separate concept entity
+    alias: "gish"
+  - canonical: "farastu"                     # gehreleth is the parent race, farastu is one caste
+    alias: "gehreleth"
+  - canonical: "gehreleth"                   # shator is one caste, separate creature entity
+    alias: "shator"
+  - canonical: "Tir na Og"                   # Tir fo Thuinn is a different Celtic place (underwater realm)
+    alias: "Tir fo Thuinn"
+  - canonical: "Great Dismal Delve"          # Sevenfold Mazework is the throne room within, separate place entity
+    alias: "Sevenfold Mazework"
+  - canonical: "Toril"                       # Forgotten Realms is the campaign setting concept, separate
+    alias: "Forgotten Realms"
+  - canonical: "Venya"                       # Green Fields is the halfling realm ON Venya, separate place
+    alias: "Green Fields"
+  - canonical: "Cathrys"                     # Scarlet Jungle is a region within Cathrys, separate place
+    alias: "Scarlet Jungle"
+  - canonical: "Eevilings"                   # eyewing is a different Abyssal creature
+    alias: "eyewing"
+  - canonical: "Undermountain"               # Mines of Marsellin is a different excavation on Thuldanin
+    alias: "Mines of Marsellin"
+  - canonical: "Citadel of Fire"             # The Citadel is Quentill Paracs's Ribcage fortress, separate
+    alias: "the Citadel"
+  - canonical: "Seker"                       # Lightbringer is a sword item, separate from the Egyptian power
+    alias: "Lightbringer"
+  - canonical: "Delmirssis"                  # Old Two-Fingers is a different planewalker
+    alias: "Old Two-Fingers"
+  - canonical: "Parts & Pieces"              # Pets & Meat was the predecessor shop, separate place entity
+    alias: "Pets & Meat"
+  - canonical: "Order of the Eternal Sun"    # Winged Lions is the lammasu militia, separate faction
+    alias: "Winged Lions"
+  - canonical: "Deva"                        # Deva is a subtype of Aasimon, not the same; remove the wrong umbrella alias
+    alias: "Aasimon"
+
+  # ── Wave 4: multi-way false aliases ──
+  - canonical: "Arborea"                     # the plane is not the same as Olympus (the layer/mountain)
+    alias: "Olympus"
+  - canonical: "Hound Archon"                # archons aren't called 'Hounds' — that alias belongs to the Plague-Mort militia
+    alias: "Hounds"
+  - canonical: "Harmonious Ascension"        # 'the Ascension' is too generic (matches Ascension avenue + The Ascension drinking hall too)
+    alias: "the Ascension"
+
+  # ── Wave 5: generic-phrase aliases that cause windowing false positives ──
+  # Diagnosed from Naratyr/infinite_staircase: 'City of the Dead' matched a generic
+  # narrative phrase about an unrelated githyanki city. Same risk for any short,
+  # common-noun alias.
+  - canonical: "Naratyr"                     # generic phrase; matches any necropolis description
+    alias: "City of the Dead"
+  - canonical: "Sigil"                       # 'the city' matches every reference to any city
+    alias: "the city"
+  - canonical: "Fortress of Disciplined Enlightenment"   # 'The Fortress' is too generic
+    alias: "The Fortress"
+  - canonical: "Harbinger House"             # 'the House' matches every faction/family/building reference
+    alias: "the House"
+
 
 # Reviewed and intentionally kept separate. No action — for audit / future-self reference.
 keeps:
   # Different planes / contexts
   - [The Ghetto, Ghetto]                       # Abellio vs Arcadia
   - [Tome of Magic, The Tome of Magic]         # Sourcebook vs Sigil shop
-  - [Unity of Rings, Unity-of-Rings]           # Concept vs deva named after it
+  - [Unity of Rings, Unity-of-Rings (deva)]    # Concept vs deva named after it. Deva renamed (was 'Unity-of-Rings') to avoid slug collision; original form kept as alias for document matching.
   - [fire shadow, shadow fire]                 # Different creatures, different planes
   - [Unit 822, Unit 437]                       # Different Logicus units
 
@@ -131,7 +527,6 @@ keeps:
   - [Lethe, Lethea]                            # river vs wemic NPC
   - [Mercuria, mercurial]                      # plane layer vs creature
   - [Shade, shad]                              # Demiplane of Shadow native vs Plane of Earth race
-  - [Diakka, diakk]                            # both Gray Waste creatures — possibly same; keep pending review
   - [Guardians, Guardian]                      # sect vs sword
   - [titan, Titans]                            # creature vs Olympian prisoners (probably keep)
   - [Chance, Chan]                             # NPC barmy vs Princess of Air
