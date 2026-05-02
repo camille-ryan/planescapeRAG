@@ -206,7 +206,17 @@ def sweep_for_missing(
 
     suggestions = tool_use.input.get("missing_entities", [])
     if not isinstance(suggestions, list):
-        raise RuntimeError(f"Model returned non-list missing_entities: {type(suggestions).__name__}")
+        # Model occasionally returns a malformed tool-call (string, dict, etc.)
+        # when generating the missing_entities array, especially on very large
+        # docs. Don't halt the pipeline — log and proceed with empty
+        # suggestions. Stages 6-7 still run; sweep additions for this doc are
+        # skipped this run. Re-run sweep for the doc if you want to recover.
+        print(
+            f"WARNING: model returned non-list missing_entities "
+            f"({type(suggestions).__name__}); skipping sweep additions for this doc.",
+            flush=True,
+        )
+        suggestions = []
 
     # Validate evidence quotes against the document
     doc_normalized = _normalize_for_match(document)
