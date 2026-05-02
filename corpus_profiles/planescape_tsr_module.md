@@ -51,7 +51,15 @@ Same conventions as the base TSR profile. If a module introduces an NPC who alre
 
 ### Supertypes
 
-Same set as the base TSR profile.
+Granular `type` values from extraction (e.g. `citadel`, `landmark`, `mephit`) are mapped to one of these supertypes:
+
+- **plane** — any of the planes in the Great Wheel cosmology (Inner, Outer, Quasielemental, Para-elemental, Astral, Ethereal, Sigil-as-plane).
+- **place** — any specific location, landmark, fortified site, or named geography within a plane.
+- **character** — a named individual: NPC, deity, proxy, lord, named lich or demigod.
+- **creature** — a species, race, or monster type used as a category (not a named individual).
+- **faction** — one of the philosophical/political factions of Sigil and beyond.
+- **item** — a magic item, artifact, or notable physical object.
+- **concept** — a named cosmological concept, philosophical doctrine, or cant term.
 
 ### OCR corrections
 
