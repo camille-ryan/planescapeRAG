@@ -3,5 +3,120 @@
   "campaign_setting": "documents/Boxed Sets/TSR 2600 Planescape Campaign Setting.pdf",
   "planes_of_chaos": "documents/Boxed Sets/TSR 2603 Planes of Chaos.pdf",
   "planes_of_law": "documents/Boxed Sets/TSR 2607 Planes of Law.pdf",
-  "players_primer_to_the_outlands": "documents/Boxed Sets/TSR 2610 Player's Primer to the Outlands.pdf"
+  "players_primer_to_the_outlands": "documents/Boxed Sets/TSR 2610 Player's Primer to the Outlands.pdf",
+  "planes_of_conflict": {
+    "pdf": "documents/Boxed Sets/TSR 2615 Planes of Conflict.pdf",
+    "type": "canonical",
+    "title": "Planes of Conflict"
+  },
+  "hellbound": {
+    "pdf": "documents/Boxed Sets/TSR 2621 Hellbound The Blood War.pdf",
+    "type": "canonical",
+    "title": "Hellbound: The Blood War"
+  },
+  "in_the_cage": {
+    "pdf": "documents/Accessories/TSR 2609 In The Cage A Guide to Sigil.pdf",
+    "type": "canonical",
+    "title": "In the Cage: A Guide to Sigil"
+  },
+  "factols_manifesto": {
+    "pdf": "documents/Accessories/TSR 2611 The Factol's Manifesto.pdf",
+    "type": "canonical",
+    "title": "The Factol's Manifesto"
+  },
+  "planeswalkers_handbook": {
+    "pdf": "documents/Accessories/TSR 2620 The Planeswalker's Handbook.pdf",
+    "type": "canonical",
+    "title": "The Planeswalker's Handbook"
+  },
+  "on_hallowed_ground": {
+    "pdf": "documents/Accessories/TSR 2623 On Hallowed Ground.pdf",
+    "type": "canonical",
+    "title": "On Hallowed Ground"
+  },
+  "uncaged_faces_of_sigil": {
+    "pdf": "documents/Accessories/TSR 2624 Uncaged Faces of Sigil.pdf",
+    "type": "canonical",
+    "title": "Uncaged: Faces of Sigil"
+  },
+  "guide_to_astral": {
+    "pdf": "documents/Accessories/TSR 2625 A Guide to the Astral Plane.pdf",
+    "type": "canonical",
+    "title": "A Guide to the Astral Plane"
+  },
+  "faces_of_evil": {
+    "pdf": "documents/Accessories/TSR 2630 Faces of Evil the Fiends.pdf",
+    "type": "canonical",
+    "title": "Faces of Evil: The Fiends"
+  },
+  "guide_to_ethereal": {
+    "pdf": "documents/Accessories/TSR 2633 Planescape A Guide to the Ethereal Plane.pdf",
+    "type": "canonical",
+    "title": "A Guide to the Ethereal Plane"
+  },
+  "inner_planes": {
+    "pdf": "documents/Accessories/TSR 2634 The Inner Planes.pdf",
+    "type": "canonical",
+    "title": "The Inner Planes"
+  },
+  "eternal_boundary": {
+    "pdf": "documents/Modules/TSR 2601 The Eternal Boundary.pdf",
+    "type": "adventure",
+    "title": "The Eternal Boundary"
+  },
+  "well_of_worlds": {
+    "pdf": "documents/Modules/TSR 2604 The Well of Worlds.pdf",
+    "type": "adventure",
+    "title": "The Well of Worlds"
+  },
+  "in_the_abyss": {
+    "pdf": "documents/Modules/TSR 2605 In the Abyss.pdf",
+    "type": "adventure",
+    "title": "In the Abyss"
+  },
+  "deva_spark": {
+    "pdf": "documents/Modules/TSR 2606 The Deva Spark.pdf",
+    "type": "adventure",
+    "title": "The Deva Spark"
+  },
+  "fires_of_dis": {
+    "pdf": "documents/Modules/TSR 2608 Fires of Dis.pdf",
+    "type": "adventure",
+    "title": "Fires of Dis"
+  },
+  "harbinger_house": {
+    "pdf": "documents/Modules/TSR 2614 Harbinger House.pdf",
+    "type": "adventure",
+    "title": "Harbinger House"
+  },
+  "something_wild": {
+    "pdf": "documents/Modules/TSR 2619 Something Wild.pdf",
+    "type": "adventure",
+    "title": "Something Wild"
+  },
+  "doors_to_the_unknown": {
+    "pdf": "documents/Modules/TSR 2626 Doors to the Unknown.pdf",
+    "type": "adventure",
+    "title": "Doors to the Unknown"
+  },
+  "great_modron_march": {
+    "pdf": "documents/Modules/TSR 2628 The Great Modron March.pdf",
+    "type": "adventure",
+    "title": "The Great Modron March"
+  },
+  "faction_war": {
+    "pdf": "documents/Modules/TSR 2629 Faction War.pdf",
+    "type": "adventure",
+    "title": "Faction War"
+  },
+  "dead_gods": {
+    "pdf": "documents/Modules/TSR 2631 Dead Gods.pdf",
+    "type": "adventure",
+    "title": "Dead Gods"
+  },
+  "infinite_staircase": {
+    "pdf": "documents/Modules/TSR 2632 Tales From the Infinite Staircase.pdf",
+    "type": "adventure",
+    "title": "Tales from the Infinite Staircase"
+  }
 }
