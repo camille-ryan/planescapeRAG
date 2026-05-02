@@ -170,8 +170,10 @@ def run_pipeline(
     pdf_stem = pdf_path.stem.replace(" ", "_")
     # OCR'd markdown lives outside tmp/ so it survives tmp cleanups and is
     # editable as canonical source. Path is `<project>/ocr/<doc_tag>.md`.
+    # Per-chunk request/results JSONLs live alongside under ocr/_raw/<doc_tag>/.
     ocr_dir = graph_root.parent / "ocr"
     combined_md = ocr_dir / f"{doc_tag}.md"
+    ocr_raw_dir = ocr_dir / "_raw" / doc_tag
     legacy_combined_md = work_dir / f"{pdf_stem}_combined.md"
     if not combined_md.exists() and legacy_combined_md.exists():
         # One-time migration on read: if a previous run wrote to the old
@@ -202,6 +204,7 @@ def run_pipeline(
         submit_chunked(
             pdf_path=pdf_path, output_dir=work_dir, profile=profile,
             chunk_size=chunk_size, combined_md_path=combined_md,
+            raw_dir=ocr_raw_dir,
         )
         if not combined_md.exists():
             raise FileNotFoundError(f"Expected combined markdown at {combined_md} after OCR stage")

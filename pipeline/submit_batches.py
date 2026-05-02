@@ -31,26 +31,41 @@ def submit_chunked(
     page_start: int = 1,
     page_end: Optional[int] = None,
     combined_md_path: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
 ) -> Path:
+    """Submit a PDF for chunked OCR via OpenAI batch API.
+
+    Outputs:
+    - `combined_md_path`: the assembled markdown (canonical OCR output).
+    - `raw_dir`/chunkNN_pY-Z.jsonl: the request body sent to OpenAI per chunk.
+    - `raw_dir`/chunkNN_pY-Z_results.jsonl: OpenAI's response, the recoverable
+      OCR data — keep these to rebuild combined.md without re-OCR ($).
+    - `raw_dir`/chunkNN_pY-Z_errors.jsonl: per-page errors, useful for debugging.
+    - `raw_dir`/all_results.jsonl: concatenation used to assemble combined.md.
+
+    `raw_dir` defaults to `output_dir` for backward compat with direct CLI use.
+    """
     settings = Settings()
     ocr = OpenAIOCR(settings)
     client = OpenAI()
     output_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir = raw_dir or output_dir
+    raw_dir.mkdir(parents=True, exist_ok=True)
 
     if page_end is None:
         from pdf2image.pdf2image import pdfinfo_from_path
         page_end = pdfinfo_from_path(str(pdf_path))["Pages"]
 
-    stem = pdf_path.stem.replace(" ", "_")
     result_files = []
     chunk_start = page_start
     chunk_idx = 1
 
     while chunk_start <= page_end:
         chunk_end = min(chunk_start + chunk_size - 1, page_end)
-        tag = f"{stem}_chunk{chunk_idx:02d}_p{chunk_start}-{chunk_end}"
-        jsonl_path = output_dir / f"{tag}.jsonl"
-        results_path = output_dir / f"{tag}_results.jsonl"
+        # Simplified naming (no stem prefix) — `raw_dir` already scopes by doc_tag.
+        tag = f"chunk{chunk_idx:02d}_p{chunk_start}-{chunk_end}"
+        jsonl_path = raw_dir / f"{tag}.jsonl"
+        results_path = raw_dir / f"{tag}_results.jsonl"
 
         print(f"\n=== chunk {chunk_idx}: pages {chunk_start}-{chunk_end} ===", flush=True)
 
@@ -88,14 +103,14 @@ def submit_chunked(
         print(f"  saved: {results_path}", flush=True)
 
         if batch.error_file_id:
-            err_path = output_dir / f"{tag}_errors.jsonl"
+            err_path = raw_dir / f"{tag}_errors.jsonl"
             err_path.write_bytes(client.files.content(batch.error_file_id).read())
             print(f"  errors: {err_path}", flush=True)
 
         chunk_start = chunk_end + 1
         chunk_idx += 1
 
-    combined_jsonl = output_dir / f"{stem}_all_results.jsonl"
+    combined_jsonl = raw_dir / "all_results.jsonl"
     with combined_jsonl.open("wb") as out:
         for rp in result_files:
             out.write(rp.read_bytes())
@@ -103,6 +118,7 @@ def submit_chunked(
 
     # `combined_md_path` is the explicit destination from the orchestrator.
     # Fallback to the legacy in-tmp location for direct CLI use.
+    stem = pdf_path.stem.replace(" ", "_")
     md_path = combined_md_path if combined_md_path is not None else output_dir / f"{stem}_combined.md"
     md_path.parent.mkdir(parents=True, exist_ok=True)
     combine_batch_results(combined_jsonl, md_path)
