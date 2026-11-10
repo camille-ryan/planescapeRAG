@@ -15,53 +15,53 @@ The current build has ingested **27 TSR Planescape products** (boxed sets, acces
 
 ## Architecture
 
+Two halves share the entity graph: an offline **ingest pipeline** that builds it, and an online **query path** that retrieves from it.
+
+### Ingest: scanned PDFs → entity graph
+
 ```mermaid
-flowchart LR
-    subgraph INGEST["Offline ingest &mdash; run_pipeline.py / tools/batch_pipeline.py"]
-        direction TB
-        PDF[/"Scanned PDFs<br/>documents/"/] --> OCR["1 &middot; OCR<br/>pdf2image &rarr; S3 presigned URLs<br/>&rarr; GPT-4o vision (Batch API)"]
-        PROFILE[/"Corpus profile<br/>corpus_profiles/*.md<br/>OCR rules + corrections"/] -.-> OCR
-        OCR --> MD[("ocr/&lt;doc_tag&gt;.md<br/>page-marked markdown")]
-        MD --> P1["2 &middot; Pass 1: registry<br/>Claude tool use"]
-        P1 --> DEDUP["3 &middot; Dedup"] --> MERGE["4 &middot; Merge into global<br/>fuzzy matches &rarr; LLM verifier"]
-        MERGE --> SWEEP["5 &middot; Completeness sweep<br/>LLM: what's missing?"]
-        SWEEP --> HEUR["6 &middot; Heuristic candidates<br/>regex + LLM verifier"]
-        HEUR --> CANON["7 &middot; Canonicalize types"]
-        CANON --> REG[("graph/registry.json<br/>global entity registry")]
-        REG --> P2["8&ndash;9 &middot; Pass 2: profiles<br/>Anthropic Batches<br/>Sonnet (notable) / Haiku (minor)<br/>windowed local registry"]
-        MD --> P2
-        P2 --> VAL{"Quote validator<br/>substring &middot; Unicode fold &middot; fuzzy"}
-        VAL --> ENT[("graph/entities/&lt;type&gt;/*.md<br/>per-source sections + [[wikilinks]]")]
-        ENT --> PRED["Predicate classification<br/>closed vocab, enum-enforced"]
-        PRED --> ENT
-        ENT --> EMB["10 &middot; Embed sections<br/>text-embedding-3-small<br/>incremental by sha256"]
-        EMB --> IDX[("chatbot/index/<br/>vectors.npy + metadata.json")]
-        ENT -.-> NEO["tools/load_neo4j.py<br/>(sketch) typed property graph"]
-        NEO -.-> NEODB[("Neo4j")]
-    end
-
-    subgraph QUERY["Online query &mdash; chatbot/ (FastAPI + HTMX)"]
-        direction TB
-        Q(["User question"]) --> QE["Embed query"]
-        QE --> KNN["FAISS top-k<br/>dedupe to best section per entity"]
-        KNN --> FWD["Forward 1-hop<br/>wikilinks out of primaries"]
-        KNN --> REV["Reverse 1-hop<br/>entities that link in"]
-        FWD --> CTX["Context set<br/>primaries + expansions (&le;15)"]
-        REV --> CTX
-        CTX --> LLM["Claude answer<br/>Haiku / Sonnet / Opus<br/>strict citation rules"]
-        LLM --> UI["Answer HTML<br/>clickable [[wikilinks]] + (doc, p. N)"]
-        CTX --> VIS["pyvis subgraph<br/>/graph/{id}"]
-        UI -.-> PAGE["Source-page viewer<br/>/page/{doc}/{p}"]
-    end
-
-    IDX --> KNN
-    ENT --> FWD
-    ENT --> REV
-    PDF -.-> PAGE
-    COST[("cost_log.jsonl<br/>per-call USD ledger")]
-    INGEST -.-> COST
-    LLM -.-> COST
+flowchart TB
+    PDF[/"Scanned PDFs"/] --> OCR["1 · OCR<br/>GPT-4o vision, Batch API"]
+    PROF[/"Corpus profile<br/>OCR rules + corrections"/] -.-> OCR
+    OCR --> MD[("ocr/doc.md<br/>page-marked markdown")]
+    MD --> P1["2 · Pass 1: entity registry<br/>Claude tool use"]
+    P1 --> DD["3 · Dedup"]
+    DD --> MG["4 · Merge into global registry<br/>LLM verifies fuzzy matches"]
+    MG --> SW["5 · Completeness sweep"]
+    SW --> HE["6 · Heuristic candidates<br/>regex + LLM verifier"]
+    HE --> CA["7 · Canonicalize types"]
+    CA --> REG[("graph/registry.json")]
+    REG --> P2["8–9 · Pass 2: entity profiles<br/>Batches · Sonnet / Haiku routing"]
+    MD --> P2
+    P2 --> VAL{"Quote<br/>validator"}
+    VAL --> ENT[("graph/entities/*.md<br/>per-source sections + wikilinks")]
+    ENT --> PR["Predicate classification<br/>closed vocabulary"]
+    PR --> ENT
+    ENT --> EM["10 · Embed each section<br/>text-embedding-3-small"]
+    EM --> IDX[("vectors.npy<br/>+ metadata.json")]
+    ENT -.-> NEO[("Neo4j<br/>(loader sketch)")]
 ```
+
+### Query: question → cited answer
+
+```mermaid
+flowchart TB
+    Q(["User question"]) --> E["Embed query"]
+    E --> K["FAISS top-5<br/>best section per entity"]
+    IDX[("vectors.npy")] --> K
+    K --> F["Forward 1-hop<br/>links out of primaries"]
+    K --> R["Reverse 1-hop<br/>entities linking in"]
+    ENT[("entity graph")] --> F
+    ENT --> R
+    F --> C["Context set<br/>up to 15 entities"]
+    R --> C
+    C --> L["Claude answer<br/>Haiku / Sonnet / Opus<br/>strict citation rules"]
+    L --> U["HTMX UI<br/>clickable wikilinks + page citations"]
+    C --> V["pyvis subgraph view"]
+    U -.-> P["Source-page viewer<br/>original scan"]
+```
+
+Every LLM call in both halves is logged to a per-call USD ledger (`cost_log.jsonl`).
 
 ### Ingest pipeline
 
